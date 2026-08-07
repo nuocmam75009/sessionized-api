@@ -6,12 +6,14 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { AssignAthleteDto } from './dto/assign-athlete.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -30,6 +32,12 @@ export class UsersController {
   @Get('me')
   me(@CurrentUser() user: JwtPayload) {
     return this.usersService.getMe(user.sub);
+  }
+
+  @ApiOperation({ summary: 'Modifier son propre profil (nom, prénom, email)' })
+  @Patch('me')
+  updateMe(@CurrentUser() user: JwtPayload, @Body() dto: UpdateProfileDto) {
+    return this.usersService.updateMe(user.sub, dto);
   }
 
   @ApiOperation({ summary: 'Lister les athlètes que je coache' })

@@ -54,12 +54,46 @@ export class UsersService {
       select: {
         id: true,
         email: true,
+        firstName: true,
+        lastName: true,
         role: true,
         createdAt: true,
         athleteProfile: { select: { id: true, coachId: true } },
         coachProfile: { select: { id: true } },
       },
     });
+  }
+
+  async updateMe(
+    userId: string,
+    dto: { firstName?: string; lastName?: string; email?: string },
+  ) {
+    if (dto.email) {
+      const existing = await this.findByEmail(dto.email);
+      if (existing && existing.id !== userId) {
+        throw new ConflictException('Cet email est déjà utilisé');
+      }
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        createdAt: true,
+      },
+    });
+    this.logger.log(`Profil mis à jour : ${updated.id} (${updated.email})`);
+
+    return updated;
   }
 
   async listAthletes(coachUserId: string) {
@@ -70,7 +104,17 @@ export class UsersService {
 
     return this.prisma.athleteProfile.findMany({
       where: { coachId: coach.id },
-      include: { user: { select: { id: true, email: true, createdAt: true } } },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            createdAt: true,
+          },
+        },
+      },
     });
   }
 
@@ -106,7 +150,11 @@ export class UsersService {
     const updated = await this.prisma.athleteProfile.update({
       where: { id: athleteUser.athleteProfile.id },
       data: { coachId: coach.id },
-      include: { user: { select: { id: true, email: true } } },
+      include: {
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true },
+        },
+      },
     });
     this.logger.log(`Athlète ${athleteEmail} assigné au coach ${coach.id}`);
 
