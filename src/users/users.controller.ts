@@ -68,6 +68,13 @@ export class UsersController {
     return this.usersService.unassignAthlete(user.sub, athleteId);
   }
 
+  @ApiOperation({ summary: 'Récupérer les infos de mon coach actuel' })
+  @Roles(Role.ATHLETE)
+  @Get('me/coach')
+  getMyCoach(@CurrentUser() user: JwtPayload) {
+    return this.usersService.getMyCoach(user.sub);
+  }
+
   @ApiOperation({ summary: 'Quitter mon coach actuel' })
   @Roles(Role.ATHLETE)
   @Delete('me/coach')

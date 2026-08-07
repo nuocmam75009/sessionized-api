@@ -101,6 +101,15 @@ export class ActivitiesController {
     return this.activitiesService.findOne(user.sub, user.role, id);
   }
 
+  @ApiOperation({
+    summary:
+      'Récupérer la trace GPS complète (points seconde par seconde) — à charger séparément pour ne pas alourdir GET /activities/:id',
+  })
+  @Get(':id/track')
+  getTrack(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.activitiesService.getTrack(user.sub, user.role, id);
+  }
+
   @ApiOperation({ summary: 'Supprimer une de mes activités' })
   @Roles(Role.ATHLETE)
   @Delete(':id')

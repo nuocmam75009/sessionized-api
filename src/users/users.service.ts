@@ -183,6 +183,27 @@ export class UsersService {
     );
   }
 
+  async getMyCoach(athleteUserId: string) {
+    const athlete = await this.getAthleteProfile(athleteUserId);
+    if (!athlete) {
+      throw new ForbiddenException('Profil athlète introuvable');
+    }
+    if (!athlete.coachId) {
+      throw new NotFoundException("Vous n'avez pas de coach actuellement");
+    }
+
+    return this.prisma.coachProfile.findUnique({
+      where: { id: athlete.coachId },
+      select: {
+        id: true,
+        createdAt: true,
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true },
+        },
+      },
+    });
+  }
+
   async leaveCoach(athleteUserId: string) {
     const athlete = await this.getAthleteProfile(athleteUserId);
     if (!athlete) {

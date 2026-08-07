@@ -131,15 +131,27 @@ model Activity {
   source   ActivitySource
   fileHash String
 
+  sport    String?
+  subSport String?
+
   startedAt        DateTime
   totalDistanceM   Float
   totalDurationSec Int
 
+  avgHeartRate   Int?
+  maxHeartRate   Int?
+  avgCadence     Int?
+  avgPower       Int?
+  totalCalories  Int?
+  elevationGainM Float?
+  elevationLossM Float?
+
   plannedSessionId String?         @unique
   plannedSession   PlannedSession? @relation(fields: [plannedSessionId], references: [id])
 
-  laps     Lap[]
-  warnings Warning[]
+  laps        Lap[]
+  trackPoints TrackPoint[]
+  warnings    Warning[]
 
   createdAt DateTime @default(now())
 
@@ -156,10 +168,35 @@ model Lap {
   durationSec     Float
   avgPaceSecPerKm Float?
   avgHeartRate    Int?
+  maxHeartRate    Int?
   avgCadence      Int?
   avgPower        Int?
 
+  avgStanceTimeMs          Float?
+  avgVerticalOscillationMm Float?
+  avgVerticalRatio         Float?
+  avgStepLengthMm          Float?
+
   @@unique([activityId, index])
+}
+
+model TrackPoint {
+  id         String   @id @default(cuid())
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  timestamp    DateTime
+  elapsedSec   Float
+  distanceM    Float?
+  latitude     Float?
+  longitude    Float?
+  altitudeM    Float?
+  heartRate    Int?
+  cadence      Int?
+  power        Int?
+  speedMPerSec Float?
+
+  @@index([activityId, elapsedSec])
 }
 
 model PlannedSession {

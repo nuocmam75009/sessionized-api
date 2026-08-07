@@ -87,9 +87,18 @@ export class ActivitiesService {
         athleteId: athlete.id,
         source: ActivitySource.FIT,
         fileHash,
+        sport: session.sport,
+        subSport: session.sub_sport,
         startedAt: new Date(session.start_time),
         totalDistanceM: session.total_distance ?? 0,
         totalDurationSec: Math.round(session.total_elapsed_time ?? 0),
+        avgHeartRate: roundOrUndefined(session.avg_heart_rate),
+        maxHeartRate: roundOrUndefined(session.max_heart_rate),
+        avgCadence: roundOrUndefined(session.avg_cadence),
+        avgPower: roundOrUndefined(session.avg_power),
+        totalCalories: roundOrUndefined(session.total_calories),
+        elevationGainM: session.total_ascent,
+        elevationLossM: session.total_descent,
         plannedSessionId: plannedSessionId ?? undefined,
         laps: {
           create: (parsed.laps ?? []).map((lap, index) => ({
@@ -97,25 +106,54 @@ export class ActivitiesService {
             distanceM: lap.total_distance ?? 0,
             durationSec: lap.total_elapsed_time ?? 0,
             avgPaceSecPerKm: lap.avg_speed ? 1000 / lap.avg_speed : undefined,
-            avgHeartRate:
-              lap.avg_heart_rate != null
-                ? Math.round(lap.avg_heart_rate)
-                : undefined,
-            avgCadence:
-              lap.avg_cadence != null ? Math.round(lap.avg_cadence) : undefined,
-            avgPower:
-              lap.avg_power != null ? Math.round(lap.avg_power) : undefined,
+            avgHeartRate: roundOrUndefined(lap.avg_heart_rate),
+            maxHeartRate: roundOrUndefined(lap.max_heart_rate),
+            avgCadence: roundOrUndefined(lap.avg_cadence),
+            avgPower: roundOrUndefined(lap.avg_power),
+            avgStanceTimeMs: lap.avg_stance_time,
+            avgVerticalOscillationMm: lap.avg_vertical_oscillation,
+            avgVerticalRatio: lap.avg_vertical_ratio,
+            avgStepLengthMm: lap.avg_step_length,
           })),
         },
       },
       include: { laps: true },
     });
 
+    // `timestamp`/`elapsed_time` are present at runtime on parsed records but
+    // missing from fit-file-parser's ParsedRecord type declarations.
+    const trackPoints = (parsed.records ?? []) as Array<
+      NonNullable<typeof parsed.records>[number] & {
+        timestamp: string;
+        elapsed_time?: number;
+      }
+    >;
+    if (trackPoints.length > 0) {
+      const startedAtMs = activity.startedAt.getTime();
+      await this.prisma.trackPoint.createMany({
+        data: trackPoints.map((record) => ({
+          activityId: activity.id,
+          timestamp: new Date(record.timestamp),
+          elapsedSec:
+            record.elapsed_time ??
+            (new Date(record.timestamp).getTime() - startedAtMs) / 1000,
+          distanceM: record.distance,
+          latitude: record.position_lat,
+          longitude: record.position_long,
+          altitudeM: record.altitude,
+          heartRate: roundOrUndefined(record.heart_rate),
+          cadence: roundOrUndefined(record.cadence),
+          power: roundOrUndefined(record.power),
+          speedMPerSec: record.speed,
+        })),
+      });
+    }
+
     this.logger.log(
-      `Activité créée : id=${activity.id}, ${activity.laps.length} lap(s), ${activity.totalDistanceM}m, ${activity.totalDurationSec}s (athlète=${athlete.id})`,
+      `Activité créée : id=${activity.id}, ${activity.laps.length} lap(s), ${trackPoints.length} point(s) GPS, ${activity.totalDistanceM}m, ${activity.totalDurationSec}s (athlète=${athlete.id})`,
     );
 
-    return activity;
+    return { ...activity, trackPointsCount: trackPoints.length };
   }
 
   async findAll(userId: string, role: Role, athleteId?: string) {
@@ -156,24 +194,22 @@ export class ActivitiesService {
       throw new NotFoundException('Activité introuvable');
     }
 
-    if (role === Role.COACH) {
-      const coach = await this.usersService.getCoachProfile(userId);
-      const athleteProfile = coach
-        ? await this.prisma.athleteProfile.findUnique({
-            where: { id: activity.athleteId },
-          })
-        : null;
-      if (!coach || athleteProfile?.coachId !== coach.id) {
-        throw new ForbiddenException('Cette activité ne vous appartient pas');
-      }
-    } else {
-      const athlete = await this.usersService.getAthleteProfile(userId);
-      if (!athlete || activity.athleteId !== athlete.id) {
-        throw new ForbiddenException('Cette activité ne vous appartient pas');
-      }
+    await this.assertActivityAccess(userId, role, activity);
+    return activity;
+  }
+
+  async getTrack(userId: string, role: Role, id: string) {
+    const activity = await this.prisma.activity.findUnique({ where: { id } });
+    if (!activity) {
+      throw new NotFoundException('Activité introuvable');
     }
 
-    return activity;
+    await this.assertActivityAccess(userId, role, activity);
+
+    return this.prisma.trackPoint.findMany({
+      where: { activityId: id },
+      orderBy: { elapsedSec: 'asc' },
+    });
   }
 
   async remove(athleteUserId: string, id: string) {
@@ -189,6 +225,30 @@ export class ActivitiesService {
 
     await this.prisma.activity.delete({ where: { id } });
     this.logger.log(`Activité supprimée : id=${id} (athlète=${athlete.id})`);
+  }
+
+  private async assertActivityAccess(
+    userId: string,
+    role: Role,
+    activity: { athleteId: string },
+  ) {
+    if (role === Role.COACH) {
+      const coach = await this.usersService.getCoachProfile(userId);
+      const athleteProfile = coach
+        ? await this.prisma.athleteProfile.findUnique({
+            where: { id: activity.athleteId },
+          })
+        : null;
+      if (!coach || athleteProfile?.coachId !== coach.id) {
+        throw new ForbiddenException('Cette activité ne vous appartient pas');
+      }
+      return;
+    }
+
+    const athlete = await this.usersService.getAthleteProfile(userId);
+    if (!athlete || activity.athleteId !== athlete.id) {
+      throw new ForbiddenException('Cette activité ne vous appartient pas');
+    }
   }
 
   private async assertPlannedSessionIsAssignable(
@@ -216,4 +276,8 @@ export class ActivitiesService {
       );
     }
   }
+}
+
+function roundOrUndefined(value: number | undefined): number | undefined {
+  return value != null ? Math.round(value) : undefined;
 }
