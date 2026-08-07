@@ -11,6 +11,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { PlansService } from './plans.service';
 import { CreatePlannedSessionDto } from './dto/create-planned-session.dto';
 import { UpdatePlannedSessionDto } from './dto/update-planned-session.dto';
@@ -21,11 +27,16 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/types/jwt-payload.interface';
 import { Role } from '../../generated/prisma/enums';
 
+@ApiTags('plans')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('plans')
 export class PlansController {
   constructor(private readonly plansService: PlansService) {}
 
+  @ApiOperation({
+    summary: 'Créer une séance planifiée pour un de mes athlètes',
+  })
   @Roles(Role.COACH)
   @Post()
   create(
@@ -35,6 +46,15 @@ export class PlansController {
     return this.plansService.create(user.sub, dto);
   }
 
+  @ApiOperation({
+    summary:
+      'Lister les séances planifiées (les miennes en tant que coach, ou les siennes en tant qu’athlète)',
+  })
+  @ApiQuery({
+    name: 'athleteId',
+    required: false,
+    description: 'Coach uniquement : filtrer sur un athlète précis',
+  })
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
@@ -43,11 +63,13 @@ export class PlansController {
     return this.plansService.findAll(user.sub, user.role, athleteId);
   }
 
+  @ApiOperation({ summary: 'Récupérer une séance planifiée' })
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.plansService.findOne(user.sub, user.role, id);
   }
 
+  @ApiOperation({ summary: 'Modifier une séance planifiée' })
   @Roles(Role.COACH)
   @Patch(':id')
   update(
@@ -58,6 +80,7 @@ export class PlansController {
     return this.plansService.update(user.sub, id, dto);
   }
 
+  @ApiOperation({ summary: 'Supprimer une séance planifiée' })
   @Roles(Role.COACH)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
