@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { PlansModule } from './plans/plans.module';
+import { ActivitiesModule } from './activities/activities.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { PlansModule } from './plans/plans.module';
     UsersModule,
     AuthModule,
     PlansModule,
+    ActivitiesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
