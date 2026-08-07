@@ -155,6 +155,9 @@ docker compose up -d postgres
 # Appliquer les migrations Prisma
 npx prisma migrate dev
 
+# Lancer la BDD
+npx prisma dev --detach
+
 # Lancer le serveur
 npm run start:dev
 ```

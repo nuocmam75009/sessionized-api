@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -21,14 +22,21 @@ interface AuthenticatedUser {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
   ) {}
 
   async register(dto: RegisterDto) {
+    this.logger.log(`Tentative d'inscription : ${dto.email} (${dto.role})`);
+
     const existing = await this.usersService.findByEmail(dto.email);
     if (existing) {
+      this.logger.warn(
+        `Inscription refusée : email déjà utilisé (${dto.email})`,
+      );
       throw new ConflictException('Un compte existe déjà avec cet email');
     }
 
@@ -38,19 +46,28 @@ export class AuthService {
       password,
       role: dto.role,
     });
+    this.logger.log(
+      `Compte créé : ${user.email} (${user.role}, id=${user.id})`,
+    );
 
     return this.buildToken(user);
   }
 
   async login(dto: LoginDto) {
+    this.logger.log(`Tentative de connexion : ${dto.email}`);
+
     const user = await this.usersService.findByEmail(dto.email);
     const passwordMatches =
       user && (await bcrypt.compare(dto.password, user.password));
 
     if (!passwordMatches) {
+      this.logger.warn(
+        `Connexion refusée : identifiants invalides (${dto.email})`,
+      );
       throw new UnauthorizedException('Identifiants invalides');
     }
 
+    this.logger.log(`Connexion réussie : ${user.email} (id=${user.id})`);
     return this.buildToken(user);
   }
 

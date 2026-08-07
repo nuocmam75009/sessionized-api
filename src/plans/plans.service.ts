@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +12,8 @@ import { Role } from '../../generated/prisma/enums';
 
 @Injectable()
 export class PlansService {
+  private readonly logger = new Logger(PlansService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
@@ -32,7 +35,7 @@ export class PlansService {
       throw new ForbiddenException("Cet athlète n'est pas coaché par vous");
     }
 
-    return this.prisma.plannedSession.create({
+    const created = await this.prisma.plannedSession.create({
       data: {
         coachId: coach.id,
         athleteId: athlete.id,
@@ -42,6 +45,11 @@ export class PlansService {
       },
       include: { plannedLaps: true },
     });
+    this.logger.log(
+      `Séance planifiée créée : id=${created.id}, ${created.plannedLaps.length} lap(s) (coach=${coach.id}, athlète=${athlete.id})`,
+    );
+
+    return created;
   }
 
   async findAll(userId: string, role: Role, athleteId?: string) {
@@ -110,6 +118,7 @@ export class PlansService {
   async remove(coachUserId: string, id: string) {
     await this.getOwnedSession(coachUserId, id);
     await this.prisma.plannedSession.delete({ where: { id } });
+    this.logger.log(`Séance planifiée supprimée : id=${id}`);
   }
 
   private async getOwnedSession(coachUserId: string, id: string) {
