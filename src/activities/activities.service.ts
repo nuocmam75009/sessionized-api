@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -13,6 +14,8 @@ import { ActivitySource, Role } from '../../generated/prisma/enums';
 
 @Injectable()
 export class ActivitiesService {
+  private readonly logger = new Logger(ActivitiesService.name);
+
   private readonly fitParser = new FitParser({
     speedUnit: 'm/s',
     lengthUnit: 'm',
@@ -30,8 +33,15 @@ export class ActivitiesService {
     plannedSessionId?: string,
   ) {
     if (!file) {
+      this.logger.warn(
+        `Upload refusé pour l'utilisateur ${athleteUserId} : aucun fichier fourni`,
+      );
       throw new BadRequestException('Aucun fichier fourni');
     }
+
+    this.logger.log(
+      `Upload reçu : ${file.originalname} (${file.size} octets) — utilisateur ${athleteUserId}`,
+    );
 
     const athlete = await this.usersService.getAthleteProfile(athleteUserId);
     if (!athlete) {
@@ -43,6 +53,9 @@ export class ActivitiesService {
       where: { athleteId_fileHash: { athleteId: athlete.id, fileHash } },
     });
     if (existing) {
+      this.logger.warn(
+        `Upload refusé : activité déjà importée (hash=${fileHash.slice(0, 12)}…, athlète=${athlete.id})`,
+      );
       throw new ConflictException('Cette activité a déjà été importée');
     }
 
@@ -52,18 +65,24 @@ export class ActivitiesService {
 
     const parsed = await this.fitParser
       .parseAsync(Buffer.from(file.buffer))
-      .catch(() => {
+      .catch((err: unknown) => {
+        this.logger.error(
+          `Échec du parsing .fit pour ${file.originalname} : ${String(err)}`,
+        );
         throw new BadRequestException('Fichier .fit invalide ou corrompu');
       });
 
     const session = parsed.sessions?.[0];
     if (!session) {
+      this.logger.warn(
+        `Upload refusé : aucune session dans ${file.originalname} (athlète=${athlete.id})`,
+      );
       throw new BadRequestException(
         'Fichier .fit invalide : aucune session trouvée',
       );
     }
 
-    return this.prisma.activity.create({
+    const activity = await this.prisma.activity.create({
       data: {
         athleteId: athlete.id,
         source: ActivitySource.FIT,
@@ -91,6 +110,12 @@ export class ActivitiesService {
       },
       include: { laps: true },
     });
+
+    this.logger.log(
+      `Activité créée : id=${activity.id}, ${activity.laps.length} lap(s), ${activity.totalDistanceM}m, ${activity.totalDurationSec}s (athlète=${athlete.id})`,
+    );
+
+    return activity;
   }
 
   async findAll(userId: string, role: Role, athleteId?: string) {
@@ -163,6 +188,7 @@ export class ActivitiesService {
     }
 
     await this.prisma.activity.delete({ where: { id } });
+    this.logger.log(`Activité supprimée : id=${id} (athlète=${athlete.id})`);
   }
 
   private async assertPlannedSessionIsAssignable(
