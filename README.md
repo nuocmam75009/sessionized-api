@@ -1,98 +1,179 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Sessionized API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend NestJS de la plateforme **Sessionized** — application de coaching sportif permettant à un coach de planifier des séances et à un athlète d'analyser ses performances via l'upload de fichiers `.fit`.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## Concept
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Sessionized met en relation des coachs et des athlètes autour de l'analyse de séances d'entraînement. L'athlète uploade son fichier `.fit` directement depuis sa montre (Garmin, Coros, Polar), le backend parse les données lap par lap et les compare au plan prescrit par le coach. Un **Warning Engine** génère automatiquement des alertes en cas d'écart significatif.
 
-## Project setup
+---
 
-```bash
-$ npm install
+## Stack technique
+
+| Couche | Technologie |
+|---|---|
+| Framework | NestJS (Node.js + TypeScript) |
+| Base de données | PostgreSQL |
+| ORM | Prisma |
+| Authentification | JWT maison (Passport.js + bcrypt) |
+| Upload fichiers | Multer |
+| Parser FIT | fit-file-parser |
+| Paiement | Stripe Connect |
+| Temps réel | WebSockets (NestJS Gateway) |
+| Tâches planifiées | NestJS Scheduler (cron) |
+
+---
+
+## Architecture
+
+```
+sessionized-api/
+├── src/
+│   ├── auth/              # JWT, stratégies Passport, guards, décorateurs
+│   ├── users/             # Gestion des utilisateurs (ATHLETE / COACH)
+│   ├── activities/        # Upload FIT, parsing, persistance
+│   ├── plans/             # Séances planifiées et laps cibles
+│   ├── analysis/          # Calcul CTL / ATL / TSB (formule Banister)
+│   ├── warnings/          # Warning Engine — 4 familles de règles
+│   ├── notifications/     # WebSocket Gateway — push temps réel
+│   ├── stripe/            # Stripe Connect — abonnements et commission
+│   └── prisma/            # Schema, migrations, PrismaService
+├── prisma/
+│   └── schema.prisma
+├── .env.example
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## Modèle de données principal
 
-# watch mode
-$ npm run start:dev
+```
+User (ATHLETE | COACH)
+  ├── AthleteProfile       → coaché par un CoachProfile
+  ├── CoachProfile         → gère N AthleteProfiles
+  ├── CorosToken           → token API Coros (si accès accordé)
+  └── Subscription         → abonnement Stripe actif
 
-# production mode
-$ npm run start:prod
+Activity (source : FIT | COROS)
+  ├── Lap[]                → données lap par lap (allure, FC, cadence, puissance)
+  ├── Warning[]            → alertes générées automatiquement
+  └── PlannedSession?      → séance prescrite associée (optionnel)
+
+TrainingLoad
+  └── CTL / ATL / TSB      → calculé quotidiennement par cron
 ```
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ npm run test
+## Warning Engine
 
-# e2e tests
-$ npm run test:e2e
+C'est le cœur métier de l'application. Déclenché automatiquement après chaque upload de fichier `.fit`, il analyse l'activité selon 4 familles de règles :
 
-# test coverage
-$ npm run test:cov
+| Famille | Déclencheur | Exemple |
+|---|---|---|
+| **Intensité** | Lap trop rapide ou trop lent vs prescrit | Réalisé 1'33"/400m, prescrit 1'50" → critique |
+| **Charge** | TSB < -25 ou pic ATL > 130% CTL | Surcharge chronique → récupération recommandée |
+| **Pattern** | Même erreur sur 3 séances consécutives | Systématiquement trop rapide → revoir allures |
+| **Récupération** | Moins de 18h entre deux séances intensives | Risque de blessure → délai insuffisant |
+
+Chaque warning a une sévérité (`INFO`, `WARNING`, `CRITICAL`) et une suggestion concrète. Les warnings `CRITICAL` déclenchent une notification WebSocket en temps réel vers l'app coach.
+
+---
+
+## Authentification
+
+JWT maison — pas d'IDP externe (pas d'Auth0).
+
+- L'utilisateur s'inscrit avec email + mot de passe
+- Le token JWT contient `{ sub, role, email }`
+- Le rôle (`ATHLETE` ou `COACH`) est vérifié par un `RolesGuard` sur chaque endpoint
+- Un athlète ne peut jamais accéder aux routes coach et vice versa
+
+---
+
+## Source de données
+
+L'athlète uploade manuellement son fichier `.fit` depuis son interface. Le backend :
+
+1. Reçoit le fichier via `POST /activities/upload`
+2. Calcule un hash SHA-256 pour détecter les doublons
+3. Parse les laps avec `fit-file-parser`
+4. Persiste l'activité et ses laps en base
+5. Déclenche le Warning Engine
+6. Notifie en temps réel via WebSocket
+
+> Si l'API Coros est accordée, un second provider viendra brancher ses données sur le même pipeline sans modifier la logique métier.
+
+---
+
+## Paiement
+
+Modèle marketplace via **Stripe Connect** :
+
+- Le coach crée un compte Stripe Express lors de son onboarding
+- L'athlète souscrit un abonnement mensuel au tarif fixé par le coach
+- Stripe répartit automatiquement : **95% coach / 5% plateforme**
+- Un webhook `invoice.paid` active l'accès de l'athlète côté backend
+
+---
+
+## Variables d'environnement
+
+Copie `.env.example` en `.env` et remplis les valeurs :
+
+```env
+# Base de données
+DATABASE_URL="postgresql://user:password@localhost:5432/sessionized"
+
+# JWT
+JWT_SECRET="ton_secret_jwt_tres_long"
+
+# Stripe
+STRIPE_SECRET_KEY="sk_test_..."
+STRIPE_WEBHOOK_SECRET="whsec_..."
+
+# Coros (si accordé)
+COROS_CLIENT_ID=""
+COROS_CLIENT_SECRET=""
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Lancer en développement
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Installer les dépendances
+npm install
+
+# Lancer PostgreSQL (Docker)
+docker compose up -d postgres
+
+# Appliquer les migrations Prisma
+npx prisma migrate dev
+
+# Lancer le serveur
+npm run start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+L'API est disponible sur `http://localhost:3001`.
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## Frontends associés
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+| App | Repo | URL de dev |
+|---|---|---|
+| Athlète | `sessionized-athlete` | `http://localhost:3000` |
+| Coach | `sessionized-coach` | `http://localhost:3002` |
 
-## Support
+Les deux frontends consomment cette API via la variable d'environnement `NEXT_PUBLIC_API_URL`.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+---
 
-## Stay in touch
+## Projet académique
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Développé dans le cadre du projet de fin d'année **Holberton School** (décembre 2026).
