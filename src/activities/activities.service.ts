@@ -11,6 +11,8 @@ import FitParser from 'fit-file-parser';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ActivitySource, Role } from '../../generated/prisma/enums';
+import type { UploadActivityDto } from './dto/upload-activity.dto';
+import type { UpdateActivityDto } from './dto/update-activity.dto';
 
 @Injectable()
 export class ActivitiesService {
@@ -30,8 +32,9 @@ export class ActivitiesService {
   async upload(
     athleteUserId: string,
     file: Express.Multer.File | undefined,
-    plannedSessionId?: string,
+    dto: UploadActivityDto,
   ) {
+    const { plannedSessionId, athleteNote, difficultyNote } = dto;
     if (!file) {
       this.logger.warn(
         `Upload refusé pour l'utilisateur ${athleteUserId} : aucun fichier fourni`,
@@ -99,6 +102,8 @@ export class ActivitiesService {
         totalCalories: roundOrUndefined(session.total_calories),
         elevationGainM: session.total_ascent,
         elevationLossM: session.total_descent,
+        athleteNote,
+        difficultyNote,
         plannedSessionId: plannedSessionId ?? undefined,
         laps: {
           create: (parsed.laps ?? []).map((lap, index) => ({
@@ -212,7 +217,32 @@ export class ActivitiesService {
     });
   }
 
+  async update(athleteUserId: string, id: string, dto: UpdateActivityDto) {
+    const activity = await this.getOwnedActivity(athleteUserId, id);
+
+    const updated = await this.prisma.activity.update({
+      where: { id: activity.id },
+      data: {
+        athleteNote: dto.athleteNote,
+        difficultyNote: dto.difficultyNote,
+      },
+      include: { laps: true },
+    });
+    this.logger.log(`Note athlète mise à jour : activité id=${id}`);
+
+    return updated;
+  }
+
   async remove(athleteUserId: string, id: string) {
+    const activity = await this.getOwnedActivity(athleteUserId, id);
+
+    await this.prisma.activity.delete({ where: { id: activity.id } });
+    this.logger.log(
+      `Activité supprimée : id=${id} (athlète=${activity.athleteId})`,
+    );
+  }
+
+  private async getOwnedActivity(athleteUserId: string, id: string) {
     const athlete = await this.usersService.getAthleteProfile(athleteUserId);
     if (!athlete) {
       throw new ForbiddenException('Profil athlète introuvable');
@@ -223,8 +253,7 @@ export class ActivitiesService {
       throw new NotFoundException('Activité introuvable');
     }
 
-    await this.prisma.activity.delete({ where: { id } });
-    this.logger.log(`Activité supprimée : id=${id} (athlète=${athlete.id})`);
+    return activity;
   }
 
   private async assertActivityAccess(

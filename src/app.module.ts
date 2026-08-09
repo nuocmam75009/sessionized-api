@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { PlansModule } from './plans/plans.module';
 import { ActivitiesModule } from './activities/activities.module';
+import { ChatModule } from './chat/chat.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 @Module({
@@ -18,6 +19,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     AuthModule,
     PlansModule,
     ActivitiesModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [

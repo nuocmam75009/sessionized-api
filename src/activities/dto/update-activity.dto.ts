@@ -1,5 +1,4 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import {
   IsInt,
   IsOptional,
@@ -9,14 +8,7 @@ import {
   Min,
 } from 'class-validator';
 
-export class UploadActivityDto {
-  @ApiPropertyOptional({
-    description: 'Lie cette activité à une séance planifiée existante',
-  })
-  @IsOptional()
-  @IsString()
-  plannedSessionId?: string;
-
+export class UpdateActivityDto {
   @ApiPropertyOptional({
     description: "Note libre de l'athlète sur le ressenti de la séance",
     example: 'Jambes lourdes sur la fin, mais bonnes sensations globales',
@@ -34,7 +26,6 @@ export class UploadActivityDto {
     maximum: 10,
   })
   @IsOptional()
-  @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(10)

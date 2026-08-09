@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   UploadedFile,
@@ -25,6 +26,7 @@ import {
 } from '@nestjs/swagger';
 import { ActivitiesService } from './activities.service';
 import { UploadActivityDto } from './dto/upload-activity.dto';
+import { UpdateActivityDto } from './dto/update-activity.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -49,6 +51,8 @@ export class ActivitiesController {
       properties: {
         file: { type: 'string', format: 'binary' },
         plannedSessionId: { type: 'string' },
+        athleteNote: { type: 'string' },
+        difficultyNote: { type: 'number', minimum: 1, maximum: 10 },
       },
     },
   })
@@ -75,7 +79,7 @@ export class ActivitiesController {
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadActivityDto,
   ) {
-    return this.activitiesService.upload(user.sub, file, dto.plannedSessionId);
+    return this.activitiesService.upload(user.sub, file, dto);
   }
 
   @ApiOperation({
@@ -108,6 +112,19 @@ export class ActivitiesController {
   @Get(':id/track')
   getTrack(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.activitiesService.getTrack(user.sub, user.role, id);
+  }
+
+  @ApiOperation({
+    summary: 'Modifier ma note/difficulté ressentie sur une activité',
+  })
+  @Roles(Role.ATHLETE)
+  @Patch(':id')
+  update(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateActivityDto,
+  ) {
+    return this.activitiesService.update(user.sub, id, dto);
   }
 
   @ApiOperation({ summary: 'Supprimer une de mes activités' })

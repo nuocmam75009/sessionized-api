@@ -55,6 +55,7 @@ model User {
 
   athleteProfile AthleteProfile?
   coachProfile   CoachProfile?
+  messages       Message[]
 }
 
 model AthleteProfile {
@@ -70,6 +71,7 @@ model AthleteProfile {
   activities      Activity[]
   plannedSessions PlannedSession[]
   trainingLoads   TrainingLoad[]
+  conversations   Conversation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -86,6 +88,7 @@ model CoachProfile {
   athletes        AthleteProfile[]
   plannedSessions PlannedSession[]
   subscriptions   Subscription[]
+  conversations   Conversation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -145,6 +148,9 @@ model Activity {
   totalCalories  Int?
   elevationGainM Float?
   elevationLossM Float?
+
+  athleteNote    String?
+  difficultyNote Int?
 
   plannedSessionId String?         @unique
   plannedSession   PlannedSession? @relation(fields: [plannedSessionId], references: [id])
@@ -258,4 +264,38 @@ model TrainingLoad {
   createdAt DateTime @default(now())
 
   @@unique([athleteId, date])
+}
+
+model Conversation {
+  id String @id @default(cuid())
+
+  athleteId String
+  athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  coachId String
+  coach   CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  messages      Message[]
+  lastMessageAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([athleteId, coachId])
+}
+
+model Message {
+  id String @id @default(cuid())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  senderId String
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content  String
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([conversationId, createdAt])
 }
