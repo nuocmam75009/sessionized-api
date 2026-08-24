@@ -68,6 +68,13 @@ export class UsersController {
     return this.usersService.unassignAthlete(user.sub, athleteId);
   }
 
+  @ApiOperation({ summary: 'Lister tous les coachs disponibles' })
+  @Roles(Role.ATHLETE)
+  @Get('coaches')
+  listCoaches() {
+    return this.usersService.listCoaches();
+  }
+
   @ApiOperation({ summary: 'Récupérer les infos de mon coach actuel' })
   @Roles(Role.ATHLETE)
   @Get('me/coach')
