@@ -14,6 +14,8 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { AssignAthleteDto } from './dto/assign-athlete.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdateCoachProfileDto } from './dto/update-coach-profile.dto';
+import { RateCoachDto } from './dto/rate-coach.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -68,6 +70,16 @@ export class UsersController {
     return this.usersService.unassignAthlete(user.sub, athleteId);
   }
 
+  @ApiOperation({ summary: 'Modifier mon profil coach (age, description, spécialité)' })
+  @Roles(Role.COACH)
+  @Patch('me/coach-profile')
+  updateMyCoachProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateCoachProfileDto,
+  ) {
+    return this.usersService.updateMyCoachProfile(user.sub, dto);
+  }
+
   @ApiOperation({ summary: 'Lister tous les coachs disponibles' })
   @Roles(Role.ATHLETE)
   @Get('coaches')
@@ -80,6 +92,13 @@ export class UsersController {
   @Get('me/coach')
   getMyCoach(@CurrentUser() user: JwtPayload) {
     return this.usersService.getMyCoach(user.sub);
+  }
+
+  @ApiOperation({ summary: 'Noter mon coach actuel (1 à 5, met à jour la moyenne du profil)' })
+  @Roles(Role.ATHLETE)
+  @Post('me/coach/rating')
+  rateMyCoach(@CurrentUser() user: JwtPayload, @Body() dto: RateCoachDto) {
+    return this.usersService.rateMyCoach(user.sub, dto.value);
   }
 
   @ApiOperation({ summary: 'Quitter mon coach actuel' })

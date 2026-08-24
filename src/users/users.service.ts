@@ -59,7 +59,15 @@ export class UsersService {
         role: true,
         createdAt: true,
         athleteProfile: { select: { id: true, coachId: true } },
-        coachProfile: { select: { id: true } },
+        coachProfile: {
+          select: {
+            id: true,
+            age: true,
+            description: true,
+            specialty: true,
+            rating: true,
+          },
+        },
       },
     });
   }
@@ -188,11 +196,44 @@ export class UsersService {
       select: {
         id: true,
         createdAt: true,
+        age: true,
+        description: true,
+        specialty: true,
+        rating: true,
         user: {
           select: { id: true, email: true, firstName: true, lastName: true },
         },
       },
     });
+  }
+
+  async updateMyCoachProfile(
+    coachUserId: string,
+    dto: { age?: number; description?: string; specialty?: string },
+  ) {
+    const coach = await this.getCoachProfile(coachUserId);
+    if (!coach) {
+      throw new ForbiddenException('Profil coach introuvable');
+    }
+
+    const updated = await this.prisma.coachProfile.update({
+      where: { id: coach.id },
+      data: {
+        age: dto.age,
+        description: dto.description,
+        specialty: dto.specialty,
+      },
+      select: {
+        id: true,
+        age: true,
+        description: true,
+        specialty: true,
+        rating: true,
+      },
+    });
+    this.logger.log(`Profil coach mis à jour : ${coach.id}`);
+
+    return updated;
   }
 
   async getMyCoach(athleteUserId: string) {
@@ -209,11 +250,50 @@ export class UsersService {
       select: {
         id: true,
         createdAt: true,
+        age: true,
+        description: true,
+        specialty: true,
+        rating: true,
         user: {
           select: { id: true, email: true, firstName: true, lastName: true },
         },
       },
     });
+  }
+
+  async rateMyCoach(athleteUserId: string, value: number) {
+    const athlete = await this.getAthleteProfile(athleteUserId);
+    if (!athlete) {
+      throw new ForbiddenException('Profil athlète introuvable');
+    }
+    if (!athlete.coachId) {
+      throw new NotFoundException("Vous n'avez pas de coach actuellement");
+    }
+
+    const coachId = athlete.coachId;
+
+    const [, aggregate] = await this.prisma.$transaction([
+      this.prisma.coachRating.upsert({
+        where: { coachId_athleteId: { coachId, athleteId: athlete.id } },
+        create: { coachId, athleteId: athlete.id, value },
+        update: { value },
+      }),
+      this.prisma.coachRating.aggregate({
+        where: { coachId },
+        _avg: { value: true },
+      }),
+    ]);
+
+    const updated = await this.prisma.coachProfile.update({
+      where: { id: coachId },
+      data: { rating: aggregate._avg.value },
+      select: { id: true, rating: true },
+    });
+    this.logger.log(
+      `Coach ${coachId} noté par l'athlète ${athlete.id} (${value}/5) — nouvelle moyenne : ${updated.rating}`,
+    );
+
+    return updated;
   }
 
   async leaveCoach(athleteUserId: string) {

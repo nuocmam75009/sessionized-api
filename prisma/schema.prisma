@@ -72,6 +72,7 @@ model AthleteProfile {
   plannedSessions PlannedSession[]
   trainingLoads   TrainingLoad[]
   conversations   Conversation[]
+  coachRatings    CoachRating[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -81,6 +82,10 @@ model CoachProfile {
   id     String @id @default(cuid())
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age         Int?
+  description String?
+  specialty   String?
+  rating      Float?
 
   stripeAccountId   String?
   monthlyPriceCents Int?
@@ -89,9 +94,27 @@ model CoachProfile {
   plannedSessions PlannedSession[]
   subscriptions   Subscription[]
   conversations   Conversation[]
+  ratings         CoachRating[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model CoachRating {
+  id String @id @default(cuid())
+
+  coachId String
+  coach   CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  athleteId String
+  athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  value Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([coachId, athleteId])
 }
 
 model CorosToken {
