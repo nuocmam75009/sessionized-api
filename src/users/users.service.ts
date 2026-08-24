@@ -183,6 +183,18 @@ export class UsersService {
     );
   }
 
+  listCoaches() {
+    return this.prisma.coachProfile.findMany({
+      select: {
+        id: true,
+        createdAt: true,
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true },
+        },
+      },
+    });
+  }
+
   async getMyCoach(athleteUserId: string) {
     const athlete = await this.getAthleteProfile(athleteUserId);
     if (!athlete) {
