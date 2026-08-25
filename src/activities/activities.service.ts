@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import FitParser from 'fit-file-parser';
+import { XMLParser } from 'fast-xml-parser';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ActivitySource, Role } from '../../generated/prisma/enums';
@@ -34,7 +35,7 @@ export class ActivitiesService {
     file: Express.Multer.File | undefined,
     dto: UploadActivityDto,
   ) {
-    const { plannedSessionId, athleteNote, difficultyNote } = dto;
+    const { workoutId, athleteNote, difficultyNote } = dto;
     if (!file) {
       this.logger.warn(
         `Upload refusé pour l'utilisateur ${athleteUserId} : aucun fichier fourni`,
@@ -62,8 +63,8 @@ export class ActivitiesService {
       throw new ConflictException('Cette activité a déjà été importée');
     }
 
-    if (plannedSessionId) {
-      await this.assertPlannedSessionIsAssignable(athlete.id, plannedSessionId);
+    if (workoutId) {
+      await this.assertWorkoutIsAssignable(athlete.id, workoutId);
     }
 
     const parsed = await this.fitParser
@@ -90,6 +91,7 @@ export class ActivitiesService {
         athleteId: athlete.id,
         source: ActivitySource.FIT,
         fileHash,
+        fitFileData: new Uint8Array(file.buffer),
         sport: session.sport,
         subSport: session.sub_sport,
         startedAt: new Date(session.start_time),
@@ -104,7 +106,7 @@ export class ActivitiesService {
         elevationLossM: session.total_descent,
         athleteNote,
         difficultyNote,
-        plannedSessionId: plannedSessionId ?? undefined,
+        workoutId: workoutId ?? undefined,
         laps: {
           create: (parsed.laps ?? []).map((lap, index) => ({
             index,
@@ -158,7 +160,7 @@ export class ActivitiesService {
       `Activité créée : id=${activity.id}, ${activity.laps.length} lap(s), ${trackPoints.length} point(s) GPS, ${activity.totalDistanceM}m, ${activity.totalDurationSec}s (athlète=${athlete.id})`,
     );
 
-    return { ...activity, trackPointsCount: trackPoints.length };
+    return { ...toActivityDto(activity), trackPointsCount: trackPoints.length };
   }
 
   async findAll(userId: string, role: Role, athleteId?: string) {
@@ -168,7 +170,7 @@ export class ActivitiesService {
         throw new ForbiddenException('Profil coach introuvable');
       }
 
-      return this.prisma.activity.findMany({
+      const activities = await this.prisma.activity.findMany({
         where: {
           athlete: { coachId: coach.id },
           ...(athleteId ? { athleteId } : {}),
@@ -176,6 +178,7 @@ export class ActivitiesService {
         include: { laps: true },
         orderBy: { startedAt: 'desc' },
       });
+      return activities.map(toActivityDto);
     }
 
     const athlete = await this.usersService.getAthleteProfile(userId);
@@ -183,11 +186,12 @@ export class ActivitiesService {
       throw new ForbiddenException('Profil athlète introuvable');
     }
 
-    return this.prisma.activity.findMany({
+    const activities = await this.prisma.activity.findMany({
       where: { athleteId: athlete.id },
       include: { laps: true },
       orderBy: { startedAt: 'desc' },
     });
+    return activities.map(toActivityDto);
   }
 
   async findOne(userId: string, role: Role, id: string) {
@@ -200,7 +204,7 @@ export class ActivitiesService {
     }
 
     await this.assertActivityAccess(userId, role, activity);
-    return activity;
+    return toActivityDto(activity);
   }
 
   async getTrack(userId: string, role: Role, id: string) {
@@ -217,6 +221,96 @@ export class ActivitiesService {
     });
   }
 
+  async uploadGpx(
+    athleteUserId: string,
+    activityId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Aucun fichier fourni');
+    }
+
+    const activity = await this.getOwnedActivity(athleteUserId, activityId);
+
+    const points = parseGpxTrackPoints(file.buffer.toString('utf-8'));
+    if (points.length === 0) {
+      throw new BadRequestException(
+        'Fichier .gpx invalide : aucun point de trace trouvé',
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.routePoint.deleteMany({
+        where: { activityId: activity.id },
+      }),
+      this.prisma.routePoint.createMany({
+        data: points.map((point) => ({
+          activityId: activity.id,
+          timestamp: point.time ? new Date(point.time) : null,
+          latitude: point.lat,
+          longitude: point.lon,
+          altitudeM: point.ele,
+        })),
+      }),
+      this.prisma.activity.update({
+        where: { id: activity.id },
+        data: { gpxFileData: new Uint8Array(file.buffer) },
+      }),
+    ]);
+
+    this.logger.log(
+      `Trace GPX importée : activité id=${activity.id}, ${points.length} point(s) (athlète=${activity.athleteId})`,
+    );
+
+    return { activityId: activity.id, routePointsCount: points.length };
+  }
+
+  async getRoute(userId: string, role: Role, id: string) {
+    const activity = await this.prisma.activity.findUnique({ where: { id } });
+    if (!activity) {
+      throw new NotFoundException('Activité introuvable');
+    }
+
+    await this.assertActivityAccess(userId, role, activity);
+
+    return this.prisma.routePoint.findMany({
+      where: { activityId: id },
+      orderBy: { timestamp: 'asc' },
+    });
+  }
+
+  async getFitFile(userId: string, role: Role, id: string) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+      select: { athleteId: true, fitFileData: true },
+    });
+    if (!activity) {
+      throw new NotFoundException('Activité introuvable');
+    }
+    await this.assertActivityAccess(userId, role, activity);
+    if (!activity.fitFileData) {
+      throw new NotFoundException('Aucun fichier .fit associé à cette activité');
+    }
+
+    return { buffer: Buffer.from(activity.fitFileData), filename: `${id}.fit` };
+  }
+
+  async getGpxFile(userId: string, role: Role, id: string) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+      select: { athleteId: true, gpxFileData: true },
+    });
+    if (!activity) {
+      throw new NotFoundException('Activité introuvable');
+    }
+    await this.assertActivityAccess(userId, role, activity);
+    if (!activity.gpxFileData) {
+      throw new NotFoundException('Aucun fichier .gpx associé à cette activité');
+    }
+
+    return { buffer: Buffer.from(activity.gpxFileData), filename: `${id}.gpx` };
+  }
+
   async update(athleteUserId: string, id: string, dto: UpdateActivityDto) {
     const activity = await this.getOwnedActivity(athleteUserId, id);
 
@@ -230,7 +324,7 @@ export class ActivitiesService {
     });
     this.logger.log(`Note athlète mise à jour : activité id=${id}`);
 
-    return updated;
+    return toActivityDto(updated);
   }
 
   async remove(athleteUserId: string, id: string) {
@@ -280,28 +374,24 @@ export class ActivitiesService {
     }
   }
 
-  private async assertPlannedSessionIsAssignable(
-    athleteId: string,
-    plannedSessionId: string,
-  ) {
-    const plannedSession = await this.prisma.plannedSession.findUnique({
-      where: { id: plannedSessionId },
+  private async assertWorkoutIsAssignable(athleteId: string, workoutId: string) {
+    const workout = await this.prisma.workout.findUnique({
+      where: { id: workoutId },
+      include: { plan: true },
     });
-    if (!plannedSession) {
-      throw new NotFoundException('Séance planifiée introuvable');
+    if (!workout) {
+      throw new NotFoundException('Workout introuvable');
     }
-    if (plannedSession.athleteId !== athleteId) {
-      throw new ForbiddenException(
-        'Cette séance planifiée ne vous appartient pas',
-      );
+    if (workout.plan.athleteId !== athleteId) {
+      throw new ForbiddenException('Ce workout ne vous appartient pas');
     }
 
     const alreadyLinked = await this.prisma.activity.findUnique({
-      where: { plannedSessionId },
+      where: { workoutId },
     });
     if (alreadyLinked) {
       throw new ConflictException(
-        'Cette séance planifiée est déjà liée à une autre activité',
+        'Ce workout est déjà lié à une autre activité',
       );
     }
   }
@@ -309,4 +399,73 @@ export class ActivitiesService {
 
 function roundOrUndefined(value: number | undefined): number | undefined {
   return value != null ? Math.round(value) : undefined;
+}
+
+function toActivityDto<
+  T extends { fitFileData?: Uint8Array | null; gpxFileData?: Uint8Array | null },
+>(
+  activity: T,
+): Omit<T, 'fitFileData' | 'gpxFileData'> & {
+  hasFitFile: boolean;
+  hasGpxFile: boolean;
+} {
+  const { fitFileData, gpxFileData, ...rest } = activity;
+  return {
+    ...rest,
+    hasFitFile: fitFileData != null,
+    hasGpxFile: gpxFileData != null,
+  };
+}
+
+interface GpxTrackPoint {
+  lat: number;
+  lon: number;
+  ele?: number;
+  time?: string;
+}
+
+const gpxParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+
+function parseGpxTrackPoints(xml: string): GpxTrackPoint[] {
+  let doc: unknown;
+  try {
+    doc = gpxParser.parse(xml);
+  } catch {
+    throw new BadRequestException('Fichier .gpx invalide ou corrompu');
+  }
+
+  const gpx = (doc as { gpx?: unknown })?.gpx as
+    | { trk?: unknown }
+    | undefined;
+  if (!gpx) {
+    throw new BadRequestException(
+      'Fichier .gpx invalide : balise <gpx> introuvable',
+    );
+  }
+
+  const points: GpxTrackPoint[] = [];
+  for (const trk of toArray<{ trkseg?: unknown }>(gpx.trk)) {
+    for (const seg of toArray<{ trkpt?: unknown }>(trk?.trkseg)) {
+      for (const pt of toArray<Record<string, unknown>>(seg?.trkpt)) {
+        const lat = Number(pt?.['@_lat']);
+        const lon = Number(pt?.['@_lon']);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) {
+          continue;
+        }
+        points.push({
+          lat,
+          lon,
+          ele: pt?.ele != null ? Number(pt.ele) : undefined,
+          time: typeof pt?.time === 'string' ? pt.time : undefined,
+        });
+      }
+    }
+  }
+
+  return points;
+}
+
+function toArray<T>(value: unknown): T[] {
+  if (value == null) return [];
+  return (Array.isArray(value) ? value : [value]) as T[];
 }

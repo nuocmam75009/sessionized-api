@@ -4,16 +4,20 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import {
@@ -35,6 +39,7 @@ import type { JwtPayload } from '../auth/types/jwt-payload.interface';
 import { Role } from '../../generated/prisma/enums';
 
 const MAX_FIT_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_GPX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
 @ApiTags('activities')
 @ApiBearerAuth()
@@ -50,7 +55,7 @@ export class ActivitiesController {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
-        plannedSessionId: { type: 'string' },
+        workoutId: { type: 'string' },
         athleteNote: { type: 'string' },
         difficultyNote: { type: 'number', minimum: 1, maximum: 10 },
       },
@@ -112,6 +117,90 @@ export class ActivitiesController {
   @Get(':id/track')
   getTrack(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.activitiesService.getTrack(user.sub, user.role, id);
+  }
+
+  @ApiOperation({
+    summary:
+      'Uploader un fichier .gpx pour le tracé carte d’une activité existante (complémentaire au .fit : laps/physio restent sur le .fit)',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @Roles(Role.ATHLETE)
+  @Post(':id/gpx')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_GPX_FILE_SIZE_BYTES },
+      fileFilter: (_req, file, callback) => {
+        if (!file.originalname.toLowerCase().endsWith('.gpx')) {
+          callback(
+            new BadRequestException('Seuls les fichiers .gpx sont acceptés'),
+            false,
+          );
+          return;
+        }
+        callback(null, true);
+      },
+    }),
+  )
+  uploadGpx(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.activitiesService.uploadGpx(user.sub, id, file);
+  }
+
+  @ApiOperation({
+    summary:
+      'Récupérer le tracé importé via .gpx (pour affichage carte) — à charger séparément',
+  })
+  @Get(':id/route')
+  getRoute(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.activitiesService.getRoute(user.sub, user.role, id);
+  }
+
+  @ApiOperation({
+    summary: 'Télécharger le fichier .fit original de cette activité',
+  })
+  @Get(':id/fit-file')
+  @Header('Content-Type', 'application/octet-stream')
+  async getFitFile(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { buffer, filename } = await this.activitiesService.getFitFile(
+      user.sub,
+      user.role,
+      id,
+    );
+    res.set('Content-Disposition', `attachment; filename="${filename}"`);
+    return new StreamableFile(buffer);
+  }
+
+  @ApiOperation({
+    summary: 'Télécharger le fichier .gpx original de cette activité',
+  })
+  @Get(':id/gpx-file')
+  @Header('Content-Type', 'application/gpx+xml')
+  async getGpxFile(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { buffer, filename } = await this.activitiesService.getGpxFile(
+      user.sub,
+      user.role,
+      id,
+    );
+    res.set('Content-Disposition', `attachment; filename="${filename}"`);
+    return new StreamableFile(buffer);
   }
 
   @ApiOperation({

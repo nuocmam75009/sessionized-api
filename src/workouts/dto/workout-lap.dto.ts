@@ -1,8 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNumber, IsOptional, Min } from 'class-validator';
+import { HeartRateZone } from '../../../generated/prisma/enums';
 
-export class PlannedLapDto {
-  @ApiProperty({ example: 0, description: 'Position du lap dans la séance' })
+export class WorkoutLapDto {
+  @ApiProperty({ example: 0, description: 'Position du lap dans le workout' })
   @IsInt()
   @Min(0)
   index: number;
@@ -27,4 +28,9 @@ export class PlannedLapDto {
   @IsNumber()
   @Min(0)
   targetDurationSec?: number;
+
+  @ApiPropertyOptional({ enum: HeartRateZone, example: HeartRateZone.Z3 })
+  @IsOptional()
+  @IsEnum(HeartRateZone)
+  targetHeartRateZone?: HeartRateZone;
 }

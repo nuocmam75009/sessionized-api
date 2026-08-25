@@ -36,6 +36,14 @@ enum WarningSeverity {
   CRITICAL
 }
 
+enum HeartRateZone {
+  Z1
+  Z2
+  Z3
+  Z4
+  Z5
+}
+
 enum SubscriptionStatus {
   INCOMPLETE
   ACTIVE
@@ -66,13 +74,13 @@ model AthleteProfile {
   coachId String?
   coach   CoachProfile? @relation(fields: [coachId], references: [id])
 
-  corosToken      CorosToken?
-  subscriptions   Subscription[]
-  activities      Activity[]
-  plannedSessions PlannedSession[]
-  trainingLoads   TrainingLoad[]
-  conversations   Conversation[]
-  coachRatings    CoachRating[]
+  corosToken    CorosToken?
+  subscriptions Subscription[]
+  activities    Activity[]
+  plan          Plan?
+  trainingLoads TrainingLoad[]
+  conversations Conversation[]
+  coachRatings  CoachRating[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -90,11 +98,11 @@ model CoachProfile {
   stripeAccountId   String?
   monthlyPriceCents Int?
 
-  athletes        AthleteProfile[]
-  plannedSessions PlannedSession[]
-  subscriptions   Subscription[]
-  conversations   Conversation[]
-  ratings         CoachRating[]
+  athletes      AthleteProfile[]
+  plans         Plan[]
+  subscriptions Subscription[]
+  conversations Conversation[]
+  ratings       CoachRating[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -157,6 +165,9 @@ model Activity {
   source   ActivitySource
   fileHash String
 
+  fitFileData Bytes?
+  gpxFileData Bytes?
+
   sport    String?
   subSport String?
 
@@ -175,11 +186,12 @@ model Activity {
   athleteNote    String?
   difficultyNote Int?
 
-  plannedSessionId String?         @unique
-  plannedSession   PlannedSession? @relation(fields: [plannedSessionId], references: [id])
+  workoutId String?  @unique
+  workout   Workout? @relation(fields: [workoutId], references: [id])
 
   laps        Lap[]
   trackPoints TrackPoint[]
+  routePoints RoutePoint[]
   warnings    Warning[]
 
   createdAt DateTime @default(now())
@@ -228,36 +240,67 @@ model TrackPoint {
   @@index([activityId, elapsedSec])
 }
 
-model PlannedSession {
+model RoutePoint {
+  id         String   @id @default(cuid())
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  timestamp DateTime?
+  latitude  Float
+  longitude Float
+  altitudeM Float?
+
+  @@index([activityId])
+}
+
+model Plan {
   id String @id @default(cuid())
 
   coachId String
-  coach   CoachProfile @relation(fields: [coachId], references: [id])
+  coach   CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
 
-  athleteId String
+  athleteId String @unique
   athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
-  title         String
-  scheduledDate DateTime
-
-  plannedLaps PlannedLap[]
-  activity    Activity?
+  workouts Workout[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
-model PlannedLap {
-  id               String         @id @default(cuid())
-  plannedSessionId String
-  plannedSession   PlannedSession @relation(fields: [plannedSessionId], references: [id], onDelete: Cascade)
+model Workout {
+  id String @id @default(cuid())
 
-  index              Int
-  targetDistanceM    Float?
-  targetPaceSecPerKm Float?
-  targetDurationSec  Float?
+  planId String
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Cascade)
 
-  @@unique([plannedSessionId, index])
+  title         String
+  scheduledDate DateTime
+
+  coachNote           String?
+  targetDistanceM     Float?
+  targetDurationSec   Float?
+  targetHeartRateZone HeartRateZone?
+
+  laps     WorkoutLap[]
+  activity Activity?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WorkoutLap {
+  id        String  @id @default(cuid())
+  workoutId String
+  workout   Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+
+  index               Int
+  targetDistanceM     Float?
+  targetPaceSecPerKm  Float?
+  targetDurationSec   Float?
+  targetHeartRateZone HeartRateZone?
+
+  @@unique([workoutId, index])
 }
 
 model Warning {

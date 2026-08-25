@@ -155,16 +155,23 @@ export class UsersService {
       );
     }
 
-    const updated = await this.prisma.athleteProfile.update({
-      where: { id: athleteUser.athleteProfile.id },
-      data: { coachId: coach.id },
-      include: {
-        user: {
-          select: { id: true, email: true, firstName: true, lastName: true },
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.athleteProfile.update({
+        where: { id: athleteUser.athleteProfile.id },
+        data: { coachId: coach.id },
+        include: {
+          user: {
+            select: { id: true, email: true, firstName: true, lastName: true },
+          },
         },
-      },
-    });
-    this.logger.log(`Athlète ${athleteEmail} assigné au coach ${coach.id}`);
+      }),
+      this.prisma.plan.create({
+        data: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id },
+      }),
+    ]);
+    this.logger.log(
+      `Athlète ${athleteEmail} assigné au coach ${coach.id}, plan créé`,
+    );
 
     return updated;
   }
@@ -182,12 +189,15 @@ export class UsersService {
       throw new NotFoundException('Athlète introuvable dans votre roster');
     }
 
-    await this.prisma.athleteProfile.update({
-      where: { id: athleteProfileId },
-      data: { coachId: null },
-    });
+    await this.prisma.$transaction([
+      this.prisma.athleteProfile.update({
+        where: { id: athleteProfileId },
+        data: { coachId: null },
+      }),
+      this.prisma.plan.deleteMany({ where: { athleteId: athleteProfileId } }),
+    ]);
     this.logger.log(
-      `Athlète ${athleteProfileId} retiré du roster du coach ${coach.id}`,
+      `Athlète ${athleteProfileId} retiré du roster du coach ${coach.id}, plan supprimé`,
     );
   }
 
@@ -306,12 +316,15 @@ export class UsersService {
     }
 
     const previousCoachId = athlete.coachId;
-    await this.prisma.athleteProfile.update({
-      where: { id: athlete.id },
-      data: { coachId: null },
-    });
+    await this.prisma.$transaction([
+      this.prisma.athleteProfile.update({
+        where: { id: athlete.id },
+        data: { coachId: null },
+      }),
+      this.prisma.plan.deleteMany({ where: { athleteId: athlete.id } }),
+    ]);
     this.logger.log(
-      `Athlète ${athlete.id} a quitté le coach ${previousCoachId}`,
+      `Athlète ${athlete.id} a quitté le coach ${previousCoachId}, plan supprimé`,
     );
   }
 }

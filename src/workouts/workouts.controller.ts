@@ -17,9 +17,9 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { PlansService } from './plans.service';
-import { CreatePlannedSessionDto } from './dto/create-planned-session.dto';
-import { UpdatePlannedSessionDto } from './dto/update-planned-session.dto';
+import { WorkoutsService } from './workouts.service';
+import { CreateWorkoutDto } from './dto/create-workout.dto';
+import { UpdateWorkoutDto } from './dto/update-workout.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -27,28 +27,25 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/types/jwt-payload.interface';
 import { Role } from '../../generated/prisma/enums';
 
-@ApiTags('plans')
+@ApiTags('workouts')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Controller('plans')
-export class PlansController {
-  constructor(private readonly plansService: PlansService) {}
+@Controller('workouts')
+export class WorkoutsController {
+  constructor(private readonly workoutsService: WorkoutsService) {}
 
   @ApiOperation({
-    summary: 'Créer une séance planifiée pour un de mes athlètes',
+    summary: 'Créer un workout pour un de mes athlètes (dans son plan)',
   })
   @Roles(Role.COACH)
   @Post()
-  create(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: CreatePlannedSessionDto,
-  ) {
-    return this.plansService.create(user.sub, dto);
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateWorkoutDto) {
+    return this.workoutsService.create(user.sub, dto);
   }
 
   @ApiOperation({
     summary:
-      'Lister les séances planifiées (les miennes en tant que coach, ou les siennes en tant qu’athlète)',
+      'Lister les workouts (les miens en tant que coach, ou les siens en tant qu’athlète)',
   })
   @ApiQuery({
     name: 'athleteId',
@@ -60,31 +57,31 @@ export class PlansController {
     @CurrentUser() user: JwtPayload,
     @Query('athleteId') athleteId?: string,
   ) {
-    return this.plansService.findAll(user.sub, user.role, athleteId);
+    return this.workoutsService.findAll(user.sub, user.role, athleteId);
   }
 
-  @ApiOperation({ summary: 'Récupérer une séance planifiée' })
+  @ApiOperation({ summary: 'Récupérer un workout' })
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.plansService.findOne(user.sub, user.role, id);
+    return this.workoutsService.findOne(user.sub, user.role, id);
   }
 
-  @ApiOperation({ summary: 'Modifier une séance planifiée' })
+  @ApiOperation({ summary: 'Modifier un workout' })
   @Roles(Role.COACH)
   @Patch(':id')
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() dto: UpdatePlannedSessionDto,
+    @Body() dto: UpdateWorkoutDto,
   ) {
-    return this.plansService.update(user.sub, id, dto);
+    return this.workoutsService.update(user.sub, id, dto);
   }
 
-  @ApiOperation({ summary: 'Supprimer une séance planifiée' })
+  @ApiOperation({ summary: 'Supprimer un workout' })
   @Roles(Role.COACH)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.plansService.remove(user.sub, id);
+    return this.workoutsService.remove(user.sub, id);
   }
 }

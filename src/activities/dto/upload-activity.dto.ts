@@ -11,11 +11,11 @@ import {
 
 export class UploadActivityDto {
   @ApiPropertyOptional({
-    description: 'Lie cette activité à une séance planifiée existante',
+    description: 'Lie cette activité à un workout existant',
   })
   @IsOptional()
   @IsString()
-  plannedSessionId?: string;
+  workoutId?: string;
 
   @ApiPropertyOptional({
     description: "Note libre de l'athlète sur le ressenti de la séance",

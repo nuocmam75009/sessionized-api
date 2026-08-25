@@ -6,7 +6,7 @@ import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
-import { PlansModule } from './plans/plans.module';
+import { WorkoutsModule } from './workouts/workouts.module';
 import { ActivitiesModule } from './activities/activities.module';
 import { ChatModule } from './chat/chat.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -17,7 +17,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     PrismaModule,
     UsersModule,
     AuthModule,
-    PlansModule,
+    WorkoutsModule,
     ActivitiesModule,
     ChatModule,
   ],
