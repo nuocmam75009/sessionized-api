@@ -49,6 +49,19 @@ export class UsersController {
     return this.usersService.listAthletes(user.sub);
   }
 
+  @ApiOperation({
+    summary:
+      'Détail d’un athlète de mon roster (infos + pointeur vers son plan)',
+  })
+  @Roles(Role.COACH)
+  @Get('me/athletes/:athleteId')
+  getAthlete(
+    @CurrentUser() user: JwtPayload,
+    @Param('athleteId') athleteId: string,
+  ) {
+    return this.usersService.getAthleteDetail(user.sub, athleteId);
+  }
+
   @ApiOperation({ summary: 'Assigner un athlète existant à mon roster' })
   @Roles(Role.COACH)
   @Post('me/athletes')
