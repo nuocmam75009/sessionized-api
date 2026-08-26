@@ -42,9 +42,9 @@ sessionized-api/
 │   └── prisma/            # Schema, migrations, PrismaService
 ├── prisma/
 │   └── schema.prisma
-├── .env.example
-├── Dockerfile
-└── docker-compose.yml
+├── scripts/
+│   └── migrate.js         # bascule sur DATABASE_URL_UNPOOLED avant `prisma migrate`
+└── .env.example
 ```
 
 ---
@@ -132,51 +132,61 @@ Modèle marketplace via **Stripe Connect** :
 
 ## Variables d'environnement
 
-Copie `.env.example` en `.env` et remplis les valeurs :
+Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est commenté dans le fichier) :
 
-```env
-# Base de données
-DATABASE_URL="postgresql://user:password@localhost:5432/sessionized"
+| Variable | Obligatoire | Description |
+|---|---|---|
+| `DATABASE_URL` | Oui | Connexion Postgres utilisée par l'app (connexion **poolée** si Neon) |
+| `DATABASE_URL_UNPOOLED` | Non | Connexion **directe**, utilisée uniquement par `npm run migrate:*` (nécessaire avec Neon, inutile avec `prisma dev` en local) |
+| `JWT_SECRET` | Oui | Secret de signature des tokens JWT — génère-en un avec `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+| `JWT_EXPIRES_IN` | Non (défaut `7d`) | Durée de validité des tokens |
+| `PORT` | Non (défaut `3000`) | Mets `3001` pour matcher les frontends (voir plus bas) |
+| `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` / `STRAVA_REDIRECT_URI` | Non | Uniquement pour tester les routes `/strava/*` — créer une app sur https://www.strava.com/settings/api |
+| `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
 
-# JWT
-JWT_SECRET="ton_secret_jwt_tres_long"
+> Stripe et Coros sont mentionnés dans la stack technique cible du projet mais **pas encore implémentés** dans le code — aucune variable d'environnement associée n'est donc requise pour l'instant.
 
-# Stripe
-STRIPE_SECRET_KEY="sk_test_..."
-STRIPE_WEBHOOK_SECRET="whsec_..."
+### D'où vient `DATABASE_URL` ?
 
-# Strava (créer une app sur https://www.strava.com/settings/api)
-STRAVA_CLIENT_ID=""
-STRAVA_CLIENT_SECRET=""
-STRAVA_REDIRECT_URI="http://localhost:3001/strava/callback"
+Le projet utilise une base **PostgreSQL hébergée sur Neon**, partagée entre les contributeurs (projet `Sessionized`), plutôt qu'une base par machine.
 
-# Coros (si accordé)
-COROS_CLIENT_ID=""
-COROS_CLIENT_SECRET=""
+**Si tu rejoins le projet** :
+1. Demande à un membre de l'équipe de t'inviter sur l'organisation Neon `Sessionized` (organization ID `org-patient-unit-17777478`).
+2. Installe et authentifie le CLI Neon, puis lie le projet et récupère les variables :
+   ```bash
+   npx neon@latest auth
+   npx neon@latest link          # sélectionne l'org "Sessionized" / projet "Sessionized"
+   npx neon@latest env pull      # écrit DATABASE_URL et DATABASE_URL_UNPOOLED dans .env
+   ```
+   (Un fichier `.neon` déjà présent dans le repo pointe vers le bon projet — `link` devrait le détecter automatiquement.)
+
+**Si tu veux juste bosser en local sans toucher à la base partagée** (ex. pour un test destructif) :
+```bash
+npx prisma dev --detach   # affiche directement l'URL prisma+postgres://... à coller dans DATABASE_URL
 ```
+Dans ce cas, laisse `DATABASE_URL_UNPOOLED` vide — inutile en local.
 
 ---
 
 ## Lancer en développement
 
 ```bash
-# Installer les dépendances
+# Installer les dépendances (régénère aussi automatiquement le client Prisma via postinstall)
 npm install
 
-# Lancer PostgreSQL (Docker)
-docker compose up -d postgres
+# Configurer .env (voir section précédente)
+cp .env.example .env
 
-# Appliquer les migrations Prisma
-npx prisma migrate dev
-
-# Lancer la BDD
-npx prisma dev --detach
+# Appliquer les migrations Prisma (bascule automatiquement sur la connexion directe)
+npm run migrate:deploy
 
 # Lancer le serveur
 npm run start:dev
 ```
 
-L'API est disponible sur `http://localhost:3001`.
+L'API est disponible sur `http://localhost:3001`, la doc Swagger sur `http://localhost:3001/docs`.
+
+> Pour créer une nouvelle migration après avoir modifié `prisma/schema.prisma`, utilise `npm run migrate:dev` (équivalent de `prisma migrate dev`, mais avec la bonne connexion).
 
 ---
 
