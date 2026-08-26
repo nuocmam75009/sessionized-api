@@ -45,6 +45,8 @@ export class AuthService {
       email: dto.email,
       password,
       role: dto.role,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
     });
     this.logger.log(
       `Compte créé : ${user.email} (${user.role}, id=${user.id})`,

@@ -10,6 +10,13 @@ import {
 
 export class UpdateActivityDto {
   @ApiPropertyOptional({
+    description: 'Lier cette activité au workout prescrit correspondant',
+  })
+  @IsOptional()
+  @IsString()
+  workoutId?: string;
+
+  @ApiPropertyOptional({
     description: "Note libre de l'athlète sur le ressenti de la séance",
     example: 'Jambes lourdes sur la fin, mais bonnes sensations globales',
   })

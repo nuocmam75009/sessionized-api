@@ -12,6 +12,8 @@ export interface CreateUserInput {
   email: string;
   password: string;
   role: Role;
+  firstName?: string;
+  lastName?: string;
 }
 
 @Injectable()
@@ -36,12 +38,14 @@ export class UsersService {
     return this.prisma.coachProfile.findUnique({ where: { userId } });
   }
 
-  create({ email, password, role }: CreateUserInput) {
+  create({ email, password, role, firstName, lastName }: CreateUserInput) {
     return this.prisma.user.create({
       data: {
         email,
         password,
         role,
+        firstName,
+        lastName,
         athleteProfile: role === Role.ATHLETE ? { create: {} } : undefined,
         coachProfile: role === Role.COACH ? { create: {} } : undefined,
       },

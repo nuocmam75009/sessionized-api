@@ -314,9 +314,14 @@ export class ActivitiesService {
   async update(athleteUserId: string, id: string, dto: UpdateActivityDto) {
     const activity = await this.getOwnedActivity(athleteUserId, id);
 
+    if (dto.workoutId && dto.workoutId !== activity.workoutId) {
+      await this.assertWorkoutIsAssignable(activity.athleteId, dto.workoutId);
+    }
+
     const updated = await this.prisma.activity.update({
       where: { id: activity.id },
       data: {
+        workoutId: dto.workoutId,
         athleteNote: dto.athleteNote,
         difficultyNote: dto.difficultyNote,
       },
