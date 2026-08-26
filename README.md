@@ -108,6 +108,15 @@ L'athlète uploade manuellement son fichier `.fit` depuis son interface. Le back
 
 > Si l'API Coros est accordée, un second provider viendra brancher ses données sur le même pipeline sans modifier la logique métier.
 
+### Import Strava (alternative à l'upload manuel)
+
+Plutôt que d'uploader `.fit` + `.gpx` à la main, un athlète peut connecter son compte Strava et importer directement une activité :
+
+1. `GET /strava/authorize` → génère l'URL OAuth Strava (le `state` est un JWT signé courte durée contenant l'`athleteId`, vérifié au retour)
+2. L'athlète autorise l'accès sur strava.com, redirigé vers `GET /strava/callback` qui échange le `code` contre un token et le stocke (`StravaToken`, même pattern que `CorosToken`)
+3. `GET /strava/activities` → liste les activités Strava récentes (pour un sélecteur côté front), avec un flag `alreadyImported`
+4. `POST /strava/activities/:id/import` → récupère laps (`/activities/:id/laps`) + trace GPS et capteurs (`/activities/:id/streams`) auprès de l'API Strava, et alimente les mêmes tables `Activity`/`Lap`/`TrackPoint` que le pipeline `.fit` — aucun fichier `.gpx` séparé n'est nécessaire, Strava fournit position + FC/cadence/puissance dans un seul stream synchronisé.
+
 ---
 
 ## Paiement
@@ -135,6 +144,11 @@ JWT_SECRET="ton_secret_jwt_tres_long"
 # Stripe
 STRIPE_SECRET_KEY="sk_test_..."
 STRIPE_WEBHOOK_SECRET="whsec_..."
+
+# Strava (créer une app sur https://www.strava.com/settings/api)
+STRAVA_CLIENT_ID=""
+STRAVA_CLIENT_SECRET=""
+STRAVA_REDIRECT_URI="http://localhost:3001/strava/callback"
 
 # Coros (si accordé)
 COROS_CLIENT_ID=""
