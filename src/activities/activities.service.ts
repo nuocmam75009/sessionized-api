@@ -374,7 +374,7 @@ export class ActivitiesService {
     }
   }
 
-  private async assertWorkoutIsAssignable(athleteId: string, workoutId: string) {
+  async assertWorkoutIsAssignable(athleteId: string, workoutId: string) {
     const workout = await this.prisma.workout.findUnique({
       where: { id: workoutId },
       include: { plan: true },
@@ -394,6 +394,27 @@ export class ActivitiesService {
         'Ce workout est déjà lié à une autre activité',
       );
     }
+  }
+
+  // Utilisé par la sync Strava automatique : trouve le workout du jour (s'il
+  // existe et n'a pas déjà une activité liée) pour l'y attacher sans action
+  // manuelle de l'athlète.
+  async findUnlinkedWorkoutIdForDate(
+    athleteId: string,
+    date: Date,
+  ): Promise<string | undefined> {
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+
+    const workout = await this.prisma.workout.findFirst({
+      where: {
+        plan: { athleteId },
+        scheduledDate: { gte: start, lt: end },
+        activity: null,
+      },
+    });
+    return workout?.id;
   }
 }
 

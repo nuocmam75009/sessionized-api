@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { WorkoutsModule } from './workouts/workouts.module';
 import { ActivitiesModule } from './activities/activities.module';
 import { ChatModule } from './chat/chat.module';
+import { StravaModule } from './strava/strava.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 @Module({
@@ -20,6 +21,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     WorkoutsModule,
     ActivitiesModule,
     ChatModule,
+    StravaModule,
   ],
   controllers: [AppController],
   providers: [

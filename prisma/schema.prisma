@@ -21,6 +21,7 @@ enum Role {
 enum ActivitySource {
   FIT
   COROS
+  STRAVA
 }
 
 enum WarningFamily {
@@ -75,6 +76,7 @@ model AthleteProfile {
   coach   CoachProfile? @relation(fields: [coachId], references: [id])
 
   corosToken    CorosToken?
+  stravaToken   StravaToken?
   subscriptions Subscription[]
   activities    Activity[]
   plan          Plan?
@@ -87,9 +89,9 @@ model AthleteProfile {
 }
 
 model CoachProfile {
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   age         Int?
   description String?
   specialty   String?
@@ -139,6 +141,20 @@ model CorosToken {
   updatedAt DateTime @updatedAt
 }
 
+model StravaToken {
+  id String @id @default(cuid())
+
+  athleteId String         @unique
+  athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Subscription {
   id String @id @default(cuid())
 
@@ -162,8 +178,9 @@ model Activity {
   athleteId String
   athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
-  source   ActivitySource
-  fileHash String
+  source           ActivitySource
+  fileHash         String
+  stravaActivityId String?
 
   fitFileData Bytes?
   gpxFileData Bytes?
@@ -259,7 +276,7 @@ model Plan {
   coachId String
   coach   CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
 
-  athleteId String @unique
+  athleteId String         @unique
   athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
   workouts Workout[]
