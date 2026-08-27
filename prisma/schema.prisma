@@ -318,9 +318,19 @@ model Plan {
   objective2 String?
 
   workouts Workout[]
+  raceDays RaceDay[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model RaceDay {
+  id     String @id @default(cuid())
+  planId String
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  title String
+  date  DateTime
 }
 
 model Workout {

@@ -92,6 +92,7 @@ export class PlansService {
           include: { laps: true },
           orderBy: { scheduledDate: 'asc' },
         },
+        raceDays: { orderBy: { date: 'asc' } },
       },
     });
     if (!plan) {

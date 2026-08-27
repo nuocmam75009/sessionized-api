@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { WorkoutsModule } from './workouts/workouts.module';
 import { PlansModule } from './plans/plans.module';
+import { RaceDaysModule } from './race-days/race-days.module';
 import { ActivitiesModule } from './activities/activities.module';
 import { ChatModule } from './chat/chat.module';
 import { StravaModule } from './strava/strava.module';
@@ -21,6 +22,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     AuthModule,
     WorkoutsModule,
     PlansModule,
+    RaceDaysModule,
     ActivitiesModule,
     ChatModule,
     StravaModule,
