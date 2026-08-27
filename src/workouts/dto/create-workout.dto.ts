@@ -16,10 +16,10 @@ import { WorkoutLapDto } from './workout-lap.dto';
 import { HeartRateZone } from '../../../generated/prisma/enums';
 
 export class CreateWorkoutDto {
-  @ApiProperty({ description: 'ID du profil AthleteProfile ciblé' })
+  @ApiProperty({ description: 'ID du Plan (bloc d’entraînement) ciblé' })
   @IsString()
   @IsNotEmpty()
-  athleteId: string;
+  planId: string;
 
   @ApiProperty({ example: 'Séance seuil' })
   @IsString()

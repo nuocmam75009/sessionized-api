@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { WorkoutsModule } from './workouts/workouts.module';
+import { PlansModule } from './plans/plans.module';
 import { ActivitiesModule } from './activities/activities.module';
 import { ChatModule } from './chat/chat.module';
 import { StravaModule } from './strava/strava.module';
@@ -19,6 +20,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     UsersModule,
     AuthModule,
     WorkoutsModule,
+    PlansModule,
     ActivitiesModule,
     ChatModule,
     StravaModule,

@@ -6,7 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Role } from '../../generated/prisma/enums';
+import {
+  AthleteSpecialty,
+  PlanStatus,
+  Role,
+} from '../../generated/prisma/enums';
 
 export interface CreateUserInput {
   email: string;
@@ -52,8 +56,8 @@ export class UsersService {
     });
   }
 
-  getMe(userId: string) {
-    return this.prisma.user.findUnique({
+  async getMe(userId: string) {
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -62,7 +66,19 @@ export class UsersService {
         lastName: true,
         role: true,
         createdAt: true,
-        athleteProfile: { select: { id: true, coachId: true } },
+        athleteProfile: {
+          select: {
+            id: true,
+            coachId: true,
+            age: true,
+            weightKg: true,
+            heightCm: true,
+            basalMetabolicRateKcal: true,
+            heartRateZonesBpm: true,
+            paceZonesSecPerKm: true,
+            specialty: true,
+          },
+        },
         coachProfile: {
           select: {
             id: true,
@@ -74,6 +90,31 @@ export class UsersService {
         },
       },
     });
+
+    this.logger.log(
+      user?.athleteProfile
+        ? `GET /users/me : athlète id=${user.athleteProfile.id}, coachId=${user.athleteProfile.coachId ?? 'aucun'}`
+        : `GET /users/me : pas de profil athlète (userId=${userId})`,
+    );
+    this.logger.log(
+      user?.coachProfile
+        ? `GET /users/me : coach id=${user.coachProfile.id}, rating=${user.coachProfile.rating ?? 'n/a'}`
+        : `GET /users/me : pas de profil coach (userId=${userId})`,
+    );
+
+    if (user?.athleteProfile) {
+      const plan = await this.prisma.plan.findFirst({
+        where: { athleteId: user.athleteProfile.id, status: PlanStatus.ACTIVE },
+        orderBy: { startDate: 'desc' },
+      });
+      this.logger.log(
+        plan
+          ? `GET /users/me : plan actif id=${plan.id}, status=${plan.status}, startDate=${plan.startDate.toISOString()}, endDate=${plan.endDate?.toISOString() ?? 'aucune'}`
+          : `GET /users/me : aucun plan actif pour l'athlète ${user.athleteProfile.id}`,
+      );
+    }
+
+    return user;
   }
 
   async updateMe(
@@ -142,7 +183,18 @@ export class UsersService {
         user: {
           select: { id: true, email: true, firstName: true, lastName: true },
         },
-        plan: { select: { id: true, createdAt: true } },
+        plans: {
+          select: {
+            id: true,
+            status: true,
+            startDate: true,
+            endDate: true,
+            objective1: true,
+            objective2: true,
+            createdAt: true,
+          },
+          orderBy: { startDate: 'desc' },
+        },
       },
     });
     if (!athlete || athlete.coachId !== coach.id) {
@@ -181,23 +233,16 @@ export class UsersService {
       );
     }
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.athleteProfile.update({
-        where: { id: athleteUser.athleteProfile.id },
-        data: { coachId: coach.id },
-        include: {
-          user: {
-            select: { id: true, email: true, firstName: true, lastName: true },
-          },
+    const updated = await this.prisma.athleteProfile.update({
+      where: { id: athleteUser.athleteProfile.id },
+      data: { coachId: coach.id },
+      include: {
+        user: {
+          select: { id: true, email: true, firstName: true, lastName: true },
         },
-      }),
-      this.prisma.plan.create({
-        data: { coachId: coach.id, athleteId: athleteUser.athleteProfile.id },
-      }),
-    ]);
-    this.logger.log(
-      `Athlète ${athleteEmail} assigné au coach ${coach.id}, plan créé`,
-    );
+      },
+    });
+    this.logger.log(`Athlète ${athleteEmail} assigné au coach ${coach.id}`);
 
     return updated;
   }
@@ -220,10 +265,15 @@ export class UsersService {
         where: { id: athleteProfileId },
         data: { coachId: null },
       }),
-      this.prisma.plan.deleteMany({ where: { athleteId: athleteProfileId } }),
+      // On garde l'historique des plans (et leurs workouts) : seul le plan actif
+      // en cours perd son statut ACTIVE, il ne peut plus recevoir de workout.
+      this.prisma.plan.updateMany({
+        where: { athleteId: athleteProfileId, status: PlanStatus.ACTIVE },
+        data: { status: PlanStatus.ARCHIVED },
+      }),
     ]);
     this.logger.log(
-      `Athlète ${athleteProfileId} retiré du roster du coach ${coach.id}, plan supprimé`,
+      `Athlète ${athleteProfileId} retiré du roster du coach ${coach.id}, plan(s) actif(s) archivé(s)`,
     );
   }
 
@@ -270,6 +320,61 @@ export class UsersService {
     this.logger.log(`Profil coach mis à jour : ${coach.id}`);
 
     return updated;
+  }
+
+  async updateMyAthleteProfile(
+    athleteUserId: string,
+    dto: {
+      age?: number;
+      weightKg?: number;
+      heightCm?: number;
+      basalMetabolicRateKcal?: number;
+      specialty?: AthleteSpecialty;
+    },
+  ) {
+    const athlete = await this.getAthleteProfile(athleteUserId);
+    if (!athlete) {
+      throw new ForbiddenException('Profil athlète introuvable');
+    }
+
+    const updated = await this.prisma.athleteProfile.update({
+      where: { id: athlete.id },
+      data: {
+        age: dto.age,
+        weightKg: dto.weightKg,
+        heightCm: dto.heightCm,
+        basalMetabolicRateKcal: dto.basalMetabolicRateKcal,
+        specialty: dto.specialty,
+      },
+      select: {
+        id: true,
+        age: true,
+        weightKg: true,
+        heightCm: true,
+        basalMetabolicRateKcal: true,
+        heartRateZonesBpm: true,
+        paceZonesSecPerKm: true,
+        specialty: true,
+      },
+    });
+    this.logger.log(`Profil athlète mis à jour : ${athlete.id}`);
+
+    return updated;
+  }
+
+  // Écriture réservée à la synchronisation Strava (StravaService.syncZones) —
+  // pas exposée via un DTO/controller, ces zones ne sont jamais saisies à la main.
+  async updateAthleteZones(
+    athleteId: string,
+    data: { heartRateZonesBpm?: number[]; paceZonesSecPerKm?: number[] },
+  ) {
+    await this.prisma.athleteProfile.update({
+      where: { id: athleteId },
+      data: {
+        heartRateZonesBpm: data.heartRateZonesBpm,
+        paceZonesSecPerKm: data.paceZonesSecPerKm,
+      },
+    });
   }
 
   async getMyCoach(athleteUserId: string) {
@@ -347,10 +452,13 @@ export class UsersService {
         where: { id: athlete.id },
         data: { coachId: null },
       }),
-      this.prisma.plan.deleteMany({ where: { athleteId: athlete.id } }),
+      this.prisma.plan.updateMany({
+        where: { athleteId: athlete.id, status: PlanStatus.ACTIVE },
+        data: { status: PlanStatus.ARCHIVED },
+      }),
     ]);
     this.logger.log(
-      `Athlète ${athlete.id} a quitté le coach ${previousCoachId}, plan supprimé`,
+      `Athlète ${athlete.id} a quitté le coach ${previousCoachId}, plan(s) actif(s) archivé(s)`,
     );
   }
 }

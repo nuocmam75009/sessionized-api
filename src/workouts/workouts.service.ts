@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
 import { UpdateWorkoutDto } from './dto/update-workout.dto';
-import { Role } from '../../generated/prisma/enums';
+import { PlanStatus, Role } from '../../generated/prisma/enums';
 
 @Injectable()
 export class WorkoutsService {
@@ -25,21 +25,20 @@ export class WorkoutsService {
       throw new ForbiddenException('Profil coach introuvable');
     }
 
-    const athlete = await this.prisma.athleteProfile.findUnique({
-      where: { id: dto.athleteId },
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: dto.planId },
     });
-    if (!athlete) {
-      throw new NotFoundException('Athlète introuvable');
+    if (!plan) {
+      throw new NotFoundException('Plan introuvable');
     }
-    if (athlete.coachId !== coach.id) {
-      throw new ForbiddenException("Cet athlète n'est pas coaché par vous");
+    if (plan.coachId !== coach.id) {
+      throw new ForbiddenException('Vous ne gérez pas ce plan');
     }
-
-    const plan = await this.prisma.plan.upsert({
-      where: { athleteId: athlete.id },
-      create: { coachId: coach.id, athleteId: athlete.id },
-      update: {},
-    });
+    if (plan.status !== PlanStatus.ACTIVE) {
+      throw new ForbiddenException(
+        "Impossible d'ajouter un workout à un plan qui n'est plus actif",
+      );
+    }
 
     const created = await this.prisma.workout.create({
       data: {
@@ -55,7 +54,7 @@ export class WorkoutsService {
       include: { laps: true },
     });
     this.logger.log(
-      `Workout créé : id=${created.id}, ${created.laps.length} lap(s) (coach=${coach.id}, athlète=${athlete.id})`,
+      `Workout créé : id=${created.id}, ${created.laps.length} lap(s) (coach=${coach.id}, plan=${plan.id})`,
     );
 
     return created;

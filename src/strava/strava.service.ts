@@ -19,7 +19,10 @@ import type { ImportStravaActivityDto } from './dto/import-strava-activity.dto';
 const STRAVA_AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
 const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token';
 const STRAVA_API_BASE = 'https://www.strava.com/api/v3';
-const STRAVA_SCOPE = 'activity:read_all';
+// profile:read_all est nécessaire pour /athlete/zones (zones FC + allure) — les
+// athlètes déjà connectés avant cet ajout devront se reconnecter pour l'obtenir,
+// Strava n'élargit pas le scope d'un token existant.
+const STRAVA_SCOPE = 'activity:read_all,profile:read_all';
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 interface StravaTokenResponse {
@@ -56,6 +59,18 @@ interface StravaLap {
   max_heartrate?: number;
   average_cadence?: number;
   average_watts?: number;
+}
+
+interface StravaZoneRange {
+  min: number;
+  max?: number;
+}
+
+// Forme documentée publiquement par l'API Strava v3 ; `run` n'est pas documenté
+// à ce jour mais est inclus par précaution (ignoré si absent de la réponse réelle).
+interface StravaAthleteZones {
+  heart_rate?: { custom_zones: boolean; zones: StravaZoneRange[] };
+  run?: { zones: StravaZoneRange[] };
 }
 
 interface StravaStreamSet {
@@ -161,6 +176,8 @@ export class StravaService {
     });
     this.logger.log(`Compte Strava connecté pour l'athlète ${athleteId}`);
 
+    await this.syncZones(athleteId, token.access_token);
+
     return { connected: true };
   }
 
@@ -225,10 +242,13 @@ export class StravaService {
     }
 
     const accessToken = await this.getValidAccessToken(athlete.id);
-    const activities = await this.stravaGet<StravaSummaryActivity[]>(
-      '/athlete/activities?per_page=30',
-      accessToken,
-    );
+    const [activities] = await Promise.all([
+      this.stravaGet<StravaSummaryActivity[]>(
+        '/athlete/activities?per_page=30',
+        accessToken,
+      ),
+      this.syncZones(athlete.id, accessToken),
+    ]);
 
     const alreadyImported = await this.prisma.activity.findMany({
       where: {
@@ -385,6 +405,33 @@ export class StravaService {
       lapsCount: activity.laps.length,
       trackPointsCount: sampleCount,
     };
+  }
+
+  // Récupère les zones FC/allure Strava et les recopie sur le profil athlète.
+  // En échec silencieux : un token pré-existant peut ne pas avoir le scope
+  // profile:read_all (ajouté après coup), ça ne doit pas casser le reste du sync.
+  private async syncZones(
+    athleteId: string,
+    accessToken: string,
+  ): Promise<void> {
+    try {
+      const zones = await this.stravaGet<StravaAthleteZones>(
+        '/athlete/zones',
+        accessToken,
+      );
+
+      await this.usersService.updateAthleteZones(athleteId, {
+        heartRateZonesBpm: zones.heart_rate?.zones.map((z) => z.max ?? z.min),
+        paceZonesSecPerKm: zones.run?.zones.map((z) =>
+          z.max ? 1000 / z.max : 1000 / z.min,
+        ),
+      });
+      this.logger.log(`Zones Strava synchronisées pour l'athlète ${athleteId}`);
+    } catch (err) {
+      this.logger.warn(
+        `Sync des zones Strava échouée pour l'athlète ${athleteId} (reconnexion avec le scope profile:read_all peut être nécessaire) : ${String(err)}`,
+      );
+    }
   }
 
   private async getValidAccessToken(athleteId: string): Promise<string> {

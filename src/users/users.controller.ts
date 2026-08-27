@@ -15,6 +15,7 @@ import { UsersService } from './users.service';
 import { AssignAthleteDto } from './dto/assign-athlete.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateCoachProfileDto } from './dto/update-coach-profile.dto';
+import { UpdateAthleteProfileDto } from './dto/update-athlete-profile.dto';
 import { RateCoachDto } from './dto/rate-coach.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -91,6 +92,19 @@ export class UsersController {
     @Body() dto: UpdateCoachProfileDto,
   ) {
     return this.usersService.updateMyCoachProfile(user.sub, dto);
+  }
+
+  @ApiOperation({
+    summary:
+      'Modifier mon profil athlète (âge, poids, taille, métabolisme basal, zones FC, spécialité)',
+  })
+  @Roles(Role.ATHLETE)
+  @Patch('me/athlete-profile')
+  updateMyAthleteProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateAthleteProfileDto,
+  ) {
+    return this.usersService.updateMyAthleteProfile(user.sub, dto);
   }
 
   @ApiOperation({ summary: 'Lister tous les coachs disponibles' })

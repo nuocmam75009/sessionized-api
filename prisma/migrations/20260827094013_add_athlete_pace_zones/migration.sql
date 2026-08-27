@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "AthleteProfile" ADD COLUMN     "paceZonesSecPerKm" DOUBLE PRECISION[] DEFAULT ARRAY[]::DOUBLE PRECISION[];

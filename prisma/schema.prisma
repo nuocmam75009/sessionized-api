@@ -52,6 +52,15 @@ enum SubscriptionStatus {
   CANCELED
 }
 
+enum AthleteSpecialty {
+  TRAIL
+  ULTRA_TRAIL
+  MIDDLE_DISTANCE_TRACK
+  MIDDLE_DISTANCE_ROAD
+  LONG_DISTANCE_TRACK
+  LONG_DISTANCE_ROAD
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -75,11 +84,24 @@ model AthleteProfile {
   coachId String?
   coach   CoachProfile? @relation(fields: [coachId], references: [id])
 
+  // Remplis par l'athlète lui-même (formulaire profil).
+  age                    Int?
+  weightKg               Float?
+  heightCm               Float?
+  basalMetabolicRateKcal Int?
+  specialty              AthleteSpecialty?
+
+  // Synchronisées depuis Strava (`GET /athlete/zones`, cf. StravaService.syncZones) —
+  // pas modifiables par l'athlète. Bornes hautes par zone, Z1 -> dernière ; la dernière
+  // zone Strava est ouverte (pas de max), on y recopie sa borne basse faute de plafond réel.
+  heartRateZonesBpm Int[]   @default([])
+  paceZonesSecPerKm Float[] @default([])
+
   corosToken    CorosToken?
   stravaToken   StravaToken?
   subscriptions Subscription[]
   activities    Activity[]
-  plan          Plan?
+  plans         Plan[]
   trainingLoads TrainingLoad[]
   conversations Conversation[]
   coachRatings  CoachRating[]
@@ -270,14 +292,30 @@ model RoutePoint {
   @@index([activityId])
 }
 
+enum PlanStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
 model Plan {
   id String @id @default(cuid())
 
+  // Enregistrement figé de qui coachait pendant ce bloc : peut différer du coach
+  // actuel de l'athlète (AthleteProfile.coachId) si la relation a changé depuis.
   coachId String
   coach   CoachProfile @relation(fields: [coachId], references: [id], onDelete: Cascade)
 
-  athleteId String         @unique
+  // Plus @unique : un athlète accumule plusieurs plans dans le temps (historique).
+  // Un seul ACTIVE à la fois par athlète, appliqué au niveau applicatif (PlansService.create).
+  athleteId String
   athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  status     PlanStatus @default(ACTIVE)
+  startDate  DateTime
+  endDate    DateTime?
+  objective1 String?
+  objective2 String?
 
   workouts Workout[]
 

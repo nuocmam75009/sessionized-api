@@ -1,0 +1,10 @@
+-- CreateEnum
+CREATE TYPE "AthleteSpecialty" AS ENUM ('TRAIL', 'ULTRA_TRAIL', 'MIDDLE_DISTANCE_TRACK', 'MIDDLE_DISTANCE_ROAD', 'LONG_DISTANCE_TRACK', 'LONG_DISTANCE_ROAD');
+
+-- AlterTable
+ALTER TABLE "AthleteProfile" ADD COLUMN     "age" INTEGER,
+ADD COLUMN     "basalMetabolicRateKcal" INTEGER,
+ADD COLUMN     "heartRateZonesBpm" INTEGER[] DEFAULT ARRAY[]::INTEGER[],
+ADD COLUMN     "heightCm" DOUBLE PRECISION,
+ADD COLUMN     "specialty" "AthleteSpecialty",
+ADD COLUMN     "weightKg" DOUBLE PRECISION;
