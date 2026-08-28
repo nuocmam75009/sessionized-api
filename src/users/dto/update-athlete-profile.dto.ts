@@ -41,5 +41,4 @@ export class UpdateAthleteProfileDto {
   @IsOptional()
   @IsEnum(AthleteSpecialty)
   specialty?: AthleteSpecialty;
-
 }

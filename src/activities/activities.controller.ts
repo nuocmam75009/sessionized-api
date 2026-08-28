@@ -24,6 +24,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiOkResponse,
   ApiOperation,
   ApiQuery,
   ApiTags,
@@ -31,6 +32,7 @@ import {
 import { ActivitiesService } from './activities.service';
 import { UploadActivityDto } from './dto/upload-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
+import { HrZonesQueryDto } from './dto/hr-zones-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -104,6 +106,42 @@ export class ActivitiesController {
     return this.activitiesService.findAll(user.sub, user.role, athleteId);
   }
 
+  @ApiOperation({
+    summary:
+      'Temps passé par zone de FC sur une période (coach : athleteId obligatoire)',
+    description:
+      'Agrégation côté serveur — voir aussi GET /activities/:id/track pour la trace détaillée d’une seule activité.',
+  })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        from: '2026-08-24T00:00:00.000Z',
+        to: '2026-08-30T21:59:59.999Z',
+        unit: 'bpm',
+        zones: [
+          { index: 1, label: 'Z1', min: 0, max: 115, seconds: 12840 },
+          { index: 2, label: 'Z2', min: 116, max: 148, seconds: 34120 },
+          { index: 3, label: 'Z3', min: 149, max: 165, seconds: 2600 },
+          { index: 4, label: 'Z4', min: 166, max: 180, seconds: 1340 },
+          { index: 5, label: 'Z5', min: 181, max: null, seconds: 300 },
+        ],
+        totalSeconds: 51200,
+        secondsWithoutData: 8000,
+        activityCount: 6,
+        activitiesWithDataCount: 5,
+      },
+    },
+  })
+  // Route à segment unique ('hr-zones') : DOIT être déclarée avant @Get(':id'),
+  // sinon Nest matche :id = "hr-zones" et renvoie une 404 "Activité introuvable".
+  @Get('hr-zones')
+  getHeartRateZones(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: HrZonesQueryDto,
+  ) {
+    return this.activitiesService.getHeartRateZones(user.sub, user.role, query);
+  }
+
   @ApiOperation({ summary: 'Récupérer une activité et ses laps' })
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
@@ -117,6 +155,45 @@ export class ActivitiesController {
   @Get(':id/track')
   getTrack(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.activitiesService.getTrack(user.sub, user.role, id);
+  }
+
+  @ApiOperation({
+    summary:
+      'Remplacer les laps d’une activité Strava par ceux de son .fit d’origine, qui porte les métriques de foulée absentes de l’API Strava (temps de contact au sol, oscillation verticale, longueur de foulée)',
+    description:
+      'Seuls les laps sont touchés : toutes les autres données de l’activité restent celles de Strava. Le fichier est refusé s’il correspond à une autre séance (écart de départ supérieur à 5 minutes), s’il ne contient aucun tour, ou s’il a déjà été importé.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @Roles(Role.ATHLETE)
+  @Post(':id/fit')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_FIT_FILE_SIZE_BYTES },
+      fileFilter: (_req, file, callback) => {
+        if (!file.originalname.toLowerCase().endsWith('.fit')) {
+          callback(
+            new BadRequestException('Seuls les fichiers .fit sont acceptés'),
+            false,
+          );
+          return;
+        }
+        callback(null, true);
+      },
+    }),
+  )
+  attachFitFile(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.activitiesService.attachFitFile(user.sub, id, file);
   }
 
   @ApiOperation({

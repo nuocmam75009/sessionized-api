@@ -24,6 +24,40 @@ enum ActivitySource {
   STRAVA
 }
 
+// Type de séance tel que déclaré sur la plateforme source (Strava : workout_type
+// / activity_tags). Strava en autorise plusieurs sur une même activité — une
+// sortie longue peut aussi être une séance — d'où la liste côté Activity.
+enum ActivityLabel {
+  RACE
+  LONG_RUN
+  WORKOUT
+  RECOVERY
+}
+
+// Intensité d'un lap. Native quand la montre écrit le champ `intensity` du
+// message lap d'un .fit — ce que beaucoup ne font pas : les fichiers Coros
+// observés ici laissent ce champ absent sur tous leurs laps. Dans tous les
+// autres cas (activité Strava, .fit muet) elle est estimée à partir des allures
+// (cf. deriveLapIntensities). En pratique c'est donc presque toujours une
+// estimation : à ne pas présenter comme une mesure.
+enum LapIntensity {
+  ACTIVE
+  REST
+  WARMUP
+  COOLDOWN
+  RECOVERY
+  INTERVAL
+  OTHER
+}
+
+// D'où vient l'intensité d'un lap : DEVICE quand la montre l'a écrite dans le
+// .fit, DERIVED quand elle a été estimée à partir des allures. Permet à
+// l'interface de ne pas présenter une estimation comme une mesure.
+enum LapIntensitySource {
+  DEVICE
+  DERIVED
+}
+
 enum WarningFamily {
   INTENSITY
   LOAD
@@ -94,6 +128,11 @@ model AthleteProfile {
   // Synchronisées depuis Strava (`GET /athlete/zones`, cf. StravaService.syncZones) —
   // pas modifiables par l'athlète. Bornes hautes par zone, Z1 -> dernière ; la dernière
   // zone Strava est ouverte (pas de max), on y recopie sa borne basse faute de plafond réel.
+  // Cette dernière valeur n'est donc jamais un plafond exploitable : tout consommateur
+  // (cf. ActivitiesService.getHeartRateZones) doit l'ignorer et ne s'en servir que pour
+  // compter le nombre de zones — y compris pour d'anciens profils synchronisés avant ce
+  // correctif, dont la valeur stockée peut encore valoir -1 (bug historique : Strava
+  // renvoie max: -1 pour sa zone ouverte, que `??` ne rattrapait pas).
   heartRateZonesBpm Int[]   @default([])
   paceZonesSecPerKm Float[] @default([])
 
@@ -201,7 +240,15 @@ model Activity {
   athlete   AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
   source           ActivitySource
+  // Identité de l'activité pour la déduplication : hash du fichier uploadé, ou
+  // `sha256("strava:<id>")` pour une activité importée depuis Strava.
   fileHash         String
+  // Hash du .fit rattaché à l'activité. Égal à fileHash pour une activité créée
+  // par upload d'un .fit ; renseigné a posteriori quand un .fit vient compléter
+  // une activité Strava (cf. ActivitiesService.attachFitFile). Garantit qu'un
+  // même fichier ne peut pas exister à la fois comme activité et comme pièce
+  // jointe d'une autre.
+  fitFileHash      String?
   stravaActivityId String?
 
   fitFileData Bytes?
@@ -209,6 +256,7 @@ model Activity {
 
   sport    String?
   subSport String?
+  labels   ActivityLabel[]
 
   startedAt        DateTime
   totalDistanceM   Float
@@ -236,6 +284,7 @@ model Activity {
   createdAt DateTime @default(now())
 
   @@unique([athleteId, fileHash])
+  @@unique([athleteId, fitFileHash])
 }
 
 model Lap {
@@ -244,6 +293,8 @@ model Lap {
   activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
 
   index           Int
+  intensity       LapIntensity?
+  intensitySource LapIntensitySource?
   distanceM       Float
   durationSec     Float
   avgPaceSecPerKm Float?

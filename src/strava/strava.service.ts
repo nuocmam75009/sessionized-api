@@ -13,8 +13,9 @@ import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ActivitiesService } from '../activities/activities.service';
-import { ActivitySource } from '../../generated/prisma/enums';
+import { ActivityLabel, ActivitySource } from '../../generated/prisma/enums';
 import type { ImportStravaActivityDto } from './dto/import-strava-activity.dto';
+import { deriveLapIntensities } from '../activities/lap-intensity';
 
 const STRAVA_AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
 const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token';
@@ -35,6 +36,12 @@ interface StravaSummaryActivity {
   id: number;
   name: string;
   sport_type: string;
+  // Type de séance déclaré sur Strava. `workout_type` est le champ documenté de
+  // l'API v3 ; `activity_tags` correspond aux libellés multiples plus récents de
+  // l'application (dont « Recovery », absent de workout_type) et n'est pas garanti
+  // sur toutes les réponses — d'où les deux champs optionnels.
+  workout_type?: number | null;
+  activity_tags?: string[] | null;
   start_date: string;
   distance: number;
   moving_time: number;
@@ -207,6 +214,7 @@ export class StravaService {
       stravaActivityId: String(activity.id),
       name: activity.name,
       sportType: activity.sport_type,
+      labels: mapStravaLabels(activity),
       startedAt: activity.start_date,
       distanceM: activity.distance,
       durationSec: activity.elapsed_time,
@@ -335,7 +343,23 @@ export class StravaService {
       ),
     ]);
 
+    // Vérification du format réellement renvoyé par l'API : `activity_tags`
+    // n'est pas documenté dans l'API v3 et peut disparaître d'une réponse à
+    // l'autre, contrairement à `workout_type`. À supprimer une fois le format
+    // confirmé sur plusieurs comptes.
+    this.logger.debug(
+      `Strava ${stravaActivityId} : workout_type=${detail.workout_type ?? 'absent'}, ` +
+        `activity_tags=${detail.activity_tags ? JSON.stringify(detail.activity_tags) : 'absent'}`,
+    );
+
     const startedAt = new Date(detail.start_date);
+    const lapIntensities = deriveLapIntensities(
+      laps.map((lap) => ({
+        distanceM: lap.distance,
+        durationSec: lap.moving_time,
+        avgSpeedMPerSec: lap.average_speed,
+      })),
+    );
 
     const activity = await this.prisma.activity.create({
       data: {
@@ -344,6 +368,7 @@ export class StravaService {
         fileHash,
         stravaActivityId,
         sport: detail.sport_type,
+        labels: mapStravaLabels(detail),
         startedAt,
         totalDistanceM: detail.distance,
         totalDurationSec: Math.round(detail.elapsed_time),
@@ -357,8 +382,9 @@ export class StravaService {
         difficultyNote: options.difficultyNote,
         workoutId: options.workoutId ?? undefined,
         laps: {
-          create: laps.map((lap) => ({
+          create: laps.map((lap, position) => ({
             index: lap.lap_index,
+            ...lapIntensities[position],
             distanceM: lap.distance,
             durationSec: lap.moving_time,
             avgPaceSecPerKm: lap.average_speed
@@ -421,7 +447,14 @@ export class StravaService {
       );
 
       await this.usersService.updateAthleteZones(athleteId, {
-        heartRateZonesBpm: zones.heart_rate?.zones.map((z) => z.max ?? z.min),
+        // Strava renvoie `max: -1` pour sa zone ouverte (pas `null`/`undefined`,
+        // donc `??` ne le rattrape pas) : on retombe sur `z.min` dans ce cas,
+        // comme pour la dernière zone. Le endpoint GET /activities/hr-zones
+        // reste défensif indépendamment de ce correctif (il ignore toujours la
+        // dernière borne du tableau, cf. ActivitiesService.getHeartRateZones).
+        heartRateZonesBpm: zones.heart_rate?.zones.map((z) =>
+          z.max && z.max > 0 ? z.max : z.min,
+        ),
         paceZonesSecPerKm: zones.run?.zones.map((z) =>
           z.max ? 1000 / z.max : 1000 / z.min,
         ),
@@ -512,4 +545,46 @@ export class StravaService {
 
 function roundOrUndefined(value: number | undefined): number | undefined {
   return value != null ? Math.round(value) : undefined;
+}
+
+// Libellés multiples de l'application Strava, tels qu'observés dans les réponses
+// exposant `activity_tags`.
+const STRAVA_TAG_LABELS: Record<string, ActivityLabel> = {
+  race: ActivityLabel.RACE,
+  longrun: ActivityLabel.LONG_RUN,
+  long_run: ActivityLabel.LONG_RUN,
+  workout: ActivityLabel.WORKOUT,
+  recovery: ActivityLabel.RECOVERY,
+};
+
+// `workout_type` de l'API v3 : un entier par sport, sans équivalent de
+// « récupération ». 0 et 10 signifient « aucun libellé ».
+const STRAVA_WORKOUT_TYPE_LABELS: Record<number, ActivityLabel> = {
+  1: ActivityLabel.RACE,
+  2: ActivityLabel.LONG_RUN,
+  3: ActivityLabel.WORKOUT,
+  11: ActivityLabel.RACE,
+  12: ActivityLabel.WORKOUT,
+};
+
+/**
+ * Traduit le type de séance déclaré sur Strava.
+ *
+ * `activity_tags` est privilégié quand il est présent : c'est le seul des deux
+ * champs à porter « Recovery » et à en accepter plusieurs. À défaut, on retombe
+ * sur `workout_type`, seul champ documenté de l'API v3.
+ */
+function mapStravaLabels(activity: StravaSummaryActivity): ActivityLabel[] {
+  if (activity.activity_tags?.length) {
+    const labels = activity.activity_tags
+      .map((tag) => STRAVA_TAG_LABELS[tag.toLowerCase()])
+      .filter((label): label is ActivityLabel => label != null);
+    return [...new Set(labels)];
+  }
+
+  const label =
+    activity.workout_type != null
+      ? STRAVA_WORKOUT_TYPE_LABELS[activity.workout_type]
+      : undefined;
+  return label ? [label] : [];
 }

@@ -84,7 +84,9 @@ export class UsersController {
     return this.usersService.unassignAthlete(user.sub, athleteId);
   }
 
-  @ApiOperation({ summary: 'Modifier mon profil coach (age, description, spécialité)' })
+  @ApiOperation({
+    summary: 'Modifier mon profil coach (age, description, spécialité)',
+  })
   @Roles(Role.COACH)
   @Patch('me/coach-profile')
   updateMyCoachProfile(
@@ -121,7 +123,9 @@ export class UsersController {
     return this.usersService.getMyCoach(user.sub);
   }
 
-  @ApiOperation({ summary: 'Noter mon coach actuel (1 à 5, met à jour la moyenne du profil)' })
+  @ApiOperation({
+    summary: 'Noter mon coach actuel (1 à 5, met à jour la moyenne du profil)',
+  })
   @Roles(Role.ATHLETE)
   @Post('me/coach/rating')
   rateMyCoach(@CurrentUser() user: JwtPayload, @Body() dto: RateCoachDto) {
