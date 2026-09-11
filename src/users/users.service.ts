@@ -26,8 +26,12 @@ export class UsersService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // Insensible à la casse : les nouveaux emails sont stockés en minuscules
+  // (NormalizeEmail), mais des comptes plus anciens peuvent contenir des majuscules.
   findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
+    return this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+    });
   }
 
   findById(id: string) {
@@ -210,8 +214,8 @@ export class UsersService {
       throw new ForbiddenException('Profil coach introuvable');
     }
 
-    const athleteUser = await this.prisma.user.findUnique({
-      where: { email: athleteEmail },
+    const athleteUser = await this.prisma.user.findFirst({
+      where: { email: { equals: athleteEmail, mode: 'insensitive' } },
       include: { athleteProfile: true },
     });
     if (!athleteUser || !athleteUser.athleteProfile) {

@@ -201,6 +201,17 @@ export class ChatService {
     return { count };
   }
 
+  /** Destinataire d'un événement « typing » : l'autre participant de la conversation. */
+  async getOtherParticipantUserId(userId: string, conversationId: string) {
+    const conversation = await this.getConversationForParticipant(
+      userId,
+      conversationId,
+    );
+    return conversation.athlete.userId === userId
+      ? conversation.coach.userId
+      : conversation.athlete.userId;
+  }
+
   private async persistMessage(
     conversationId: string,
     senderId: string,
