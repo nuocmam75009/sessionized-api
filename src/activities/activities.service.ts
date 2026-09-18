@@ -11,17 +11,21 @@ import FitParser from 'fit-file-parser';
 import { XMLParser } from 'fast-xml-parser';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import { ActivitySource, Role } from '../../generated/prisma/enums';
+import {
+  ActivitySource,
+  LapIntensity,
+  Role,
+} from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
 import type { UploadActivityDto } from './dto/upload-activity.dto';
 import type { UpdateActivityDto } from './dto/update-activity.dto';
 import type { HrZonesQueryDto } from './dto/hr-zones-query.dto';
 import { resolveFitLapIntensities } from './lap-intensity';
-
-// Une pause (arrêt Strava, feu rouge, ravito...) entre deux points ne doit
-// pas gonfler artificiellement une zone : l'écart pris en compte entre deux
-// TrackPoint consécutifs est plafonné à cette valeur (cf. getHeartRateZones).
-const MAX_SAMPLE_GAP_SEC = 10;
+import {
+  buildHeartRateSamplesCte,
+  zoneIndexExpression,
+} from './heart-rate-samples';
+import { analyzeAerobicResponse } from './aerobic-analysis';
 
 // Écart maximal toléré entre l'heure de départ d'un .fit et celle de l'activité
 // à laquelle on veut le rattacher. Strava arrondit parfois de quelques secondes ;
@@ -190,6 +194,51 @@ export class ActivitiesService {
     });
   }
 
+  /**
+   * Réponse aérobie d'une séance : facteur d'efficacité et découplage
+   * allure/FC (cf. aerobic-analysis.ts).
+   *
+   * Renvoyé séparément de GET /activities/:id parce que le calcul relit toute
+   * la trace seconde par seconde, ce que le détail de séance ne doit pas payer
+   * quand personne ne regarde l'analyse.
+   */
+  async getAerobicAnalysis(userId: string, role: Role, id: string) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+      include: { laps: { select: { intensity: true } } },
+    });
+    if (!activity) {
+      throw new NotFoundException('Activité introuvable');
+    }
+
+    await this.assertActivityAccess(userId, role, activity);
+
+    const samples = await this.prisma.trackPoint.findMany({
+      where: { activityId: id },
+      select: {
+        elapsedSec: true,
+        heartRate: true,
+        speedMPerSec: true,
+        distanceM: true,
+        altitudeM: true,
+      },
+      orderBy: { elapsedSec: 'asc' },
+    });
+
+    // L'intensité des laps reconnaît un fractionné bien plus sûrement que la
+    // variabilité de l'allure — y compris quand les récupérations sont
+    // courues, auquel cas la trace paraît régulière. Elle est le plus souvent
+    // estimée (cf. LapIntensitySource), ce qui suffit ici : au pire on refuse
+    // d'analyser une séance qui aurait pu l'être.
+    const intervalSession = activity.laps.some(
+      (lap) =>
+        lap.intensity === LapIntensity.INTERVAL ||
+        lap.intensity === LapIntensity.REST,
+    );
+
+    return analyzeAerobicResponse(samples, { intervalSession });
+  }
+
   async getHeartRateZones(userId: string, role: Role, query: HrZonesQueryDto) {
     const athlete = await this.resolveHeartRateZonesAthlete(
       userId,
@@ -265,42 +314,6 @@ export class ActivitiesService {
     return athlete;
   }
 
-  // CTE commune aux deux requêtes d'agrégation FC ci-dessous : les points de
-  // la période triés par activité, avec l'écart au point suivant plafonné à
-  // MAX_SAMPLE_GAP_SEC et le dernier point de chaque activité compté pour 1 s
-  // (pas de point suivant à qui attribuer un écart).
-  private buildHeartRateSamplesCte(
-    athleteId: string,
-    from: Date,
-    to: Date,
-  ): Prisma.Sql {
-    return Prisma.sql`
-      period_activities AS (
-        SELECT a.id
-        FROM "Activity" a
-        WHERE a."athleteId" = ${athleteId}
-          AND a."startedAt" >= ${from}
-          AND a."startedAt" <= ${to}
-      ),
-      samples AS (
-        SELECT
-          tp."activityId",
-          tp."heartRate" AS hr,
-          LEAST(
-            COALESCE(
-              LEAD(tp."elapsedSec") OVER (
-                PARTITION BY tp."activityId" ORDER BY tp."elapsedSec"
-              ) - tp."elapsedSec",
-              1
-            ),
-            ${MAX_SAMPLE_GAP_SEC}
-          ) AS dt
-        FROM "TrackPoint" tp
-        JOIN period_activities pa ON pa.id = tp."activityId"
-      )
-    `;
-  }
-
   // Athlète sans zones FC configurées (pas de Strava connecté, ou token sans
   // le scope profile:read_all) : aucune répartition possible, on ne calcule
   // que les compteurs. Évite aussi d'appeler width_bucket avec un tableau de
@@ -317,7 +330,7 @@ export class ActivitiesService {
         secondsWithoutData: number;
       }>
     >(Prisma.sql`
-      WITH ${this.buildHeartRateSamplesCte(athleteId, from, to)}
+      WITH ${buildHeartRateSamplesCte(athleteId, from, to)}
       SELECT
         (SELECT COUNT(*)::int FROM period_activities) AS "activityCount",
         (SELECT COUNT(DISTINCT "activityId")::int FROM samples WHERE hr IS NOT NULL)
@@ -332,17 +345,15 @@ export class ActivitiesService {
   // Agrégation en une seule requête SQL plutôt qu'un chargement des
   // TrackPoint en mémoire : cet endpoint doit rester valable sur une saison
   // complète (des centaines de milliers de points), l'index
-  // @@index([activityId, elapsedSec]) est là pour ça. width_bucket classe
-  // chaque FC dans un bucket 0..n-1 à partir des bornes basses des zones
-  // 2..n ; +1 pour retomber sur l'index de zone 1-based utilisé par l'API.
+  // @@index([activityId, elapsedSec]) est là pour ça. Le classement d'une FC
+  // en index de zone est celui de zoneIndexExpression (heart-rate-samples.ts),
+  // partagé avec le calcul de charge d'entraînement.
   private async queryHeartRateZoneSeconds(
     athleteId: string,
     from: Date,
     to: Date,
     highBounds: number[],
   ): Promise<HeartRateAggregate> {
-    const lowerBounds = highBounds.map((max) => max + 1);
-
     const rows = await this.prisma.$queryRaw<
       Array<{
         activityCount: number;
@@ -352,10 +363,10 @@ export class ActivitiesService {
         seconds: number | null;
       }>
     >(Prisma.sql`
-      WITH ${this.buildHeartRateSamplesCte(athleteId, from, to)},
+      WITH ${buildHeartRateSamplesCte(athleteId, from, to)},
       zone_seconds AS (
         SELECT
-          width_bucket(hr::float, ${lowerBounds}::float[]) + 1 AS zone_index,
+          ${zoneIndexExpression(highBounds)} AS zone_index,
           SUM(dt)::float AS seconds
         FROM samples
         WHERE hr IS NOT NULL
@@ -833,7 +844,10 @@ interface GpxTrackPoint {
   time?: string;
 }
 
-const gpxParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+const gpxParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+});
 
 function parseGpxTrackPoints(xml: string): GpxTrackPoint[] {
   let doc: unknown;
@@ -843,9 +857,7 @@ function parseGpxTrackPoints(xml: string): GpxTrackPoint[] {
     throw new BadRequestException('Fichier .gpx invalide ou corrompu');
   }
 
-  const gpx = (doc as { gpx?: unknown })?.gpx as
-    | { trk?: unknown }
-    | undefined;
+  const gpx = (doc as { gpx?: unknown })?.gpx as { trk?: unknown } | undefined;
   if (!gpx) {
     throw new BadRequestException(
       'Fichier .gpx invalide : balise <gpx> introuvable',

@@ -14,6 +14,7 @@ import { RaceDaysModule } from './race-days/race-days.module';
 import { ActivitiesModule } from './activities/activities.module';
 import { ChatModule } from './chat/chat.module';
 import { StravaModule } from './strava/strava.module';
+import { TrainingLoadModule } from './training-load/training-load.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 @Module({
@@ -35,6 +36,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     ActivitiesModule,
     ChatModule,
     StravaModule,
+    TrainingLoadModule,
   ],
   controllers: [AppController],
   providers: [
