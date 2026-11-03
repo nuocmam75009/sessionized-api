@@ -6,6 +6,7 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -33,8 +34,9 @@ export class AuthController {
   @ApiUnauthorizedResponse({ description: 'Identifiants invalides' })
   @ApiTooManyRequestsResponse({
     description:
-      "Plus de 5 tentatives en 15 minutes sur ce compte : connexion verrouillée jusqu'à la fin de la fenêtre",
+      "Plus de 10 requêtes par minute depuis cette IP, ou plus de 5 tentatives en 15 minutes sur ce compte (connexion verrouillée jusqu'à la fin de la fenêtre)",
   })
+  @Throttle(AUTH_THROTTLE)
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);

@@ -160,7 +160,6 @@ Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est
 | `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` / `STRAVA_REDIRECT_URI` | Non | Uniquement pour tester les routes `/strava/*` — créer une app sur https://www.strava.com/settings/api |
 | `STRAVA_TOKEN_ENCRYPTION_KEY` | Oui si Strava est utilisé | Clé AES-256 (32 octets en base64) qui chiffre les tokens Strava en base — `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Même clé pour tous ceux qui partagent une base** : sinon les tokens des autres ne se déchiffrent plus |
 | `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
-| `FRONTEND_URLS` | Non (défaut `http://localhost:3000,http://localhost:3002`) | Liste d'origines autorisées en CORS, séparées par des virgules. **À définir en prod** avec les vraies URLs des frontends déployés. |
 
 > Stripe et Coros sont mentionnés dans la stack technique cible du projet mais **pas encore implémentés** dans le code — aucune variable d'environnement associée n'est donc requise pour l'instant.
 
@@ -211,7 +210,23 @@ L'API est disponible sur `http://localhost:3001`, la doc Swagger sur `http://loc
 
 ---
 
-## Déploiement en production
+## Déploiement
+
+L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railway, Fly… — pas d'hébergement serverless type Vercel. Garder **une seule instance** (socket.io sans adapter Redis ne se partage pas entre instances).
+
+| Étape | Commande |
+|---|---|
+| Build | `npm ci --include=dev && npm run build` |
+| Migrations (avant chaque démarrage) | `npm run migrate:deploy` |
+| Démarrage | `npm run start:prod` |
+| Health check | `GET /` |
+
+- `--include=dev` est nécessaire : avec `NODE_ENV=production`, npm n'installe pas les devDependencies, dont `@nestjs/cli` qui sert au build.
+- Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée) et `DATABASE_URL_UNPOOLED` (directe, pour les migrations).
+- Variables minimales : `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `JWT_SECRET` (nouveau, ≥ 32 caractères), `CORS_ORIGINS`, `REDIS_URL`. Avec Strava : `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, `STRAVA_REDIRECT_URI=https://<api>/strava/callback`, `STRAVA_TOKEN_ENCRYPTION_KEY`, `ATHLETE_APP_URL` — et mettre à jour l'« Authorization Callback Domain » de l'app Strava.
+- Redis sur Render : créer un **Key Value** dans la même région que l'API, sans IP autorisée en externe, et copier son URL **interne** dans `REDIS_URL`.
+
+### Avec Docker
 
 Un `Dockerfile` multi-stage est fourni à la racine :
 
@@ -220,7 +235,7 @@ docker build -t sessionized-api .
 docker run -p 3000:3000 --env-file .env sessionized-api
 ```
 
-Au démarrage, le conteneur applique automatiquement les migrations Prisma (`migrate:deploy`) avant de lancer le serveur — inutile de le faire manuellement. Variables d'environnement obligatoires à fournir à la plateforme d'hébergement : `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `JWT_SECRET`, `REDIS_URL`, `FRONTEND_URLS` (voir tableau ci-dessus).
+Au démarrage, le conteneur applique automatiquement les migrations Prisma (`migrate:deploy`) avant de lancer le serveur. L'image définit `NODE_ENV=production` : il faut donc les mêmes variables que ci-dessus.
 
 > Dans un conteneur, `localhost` désigne le conteneur lui-même : pour joindre le Redis de `docker compose` depuis `docker run`, utilise `REDIS_URL=redis://host.docker.internal:6379`.
 
