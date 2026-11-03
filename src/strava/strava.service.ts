@@ -15,6 +15,7 @@ import { UsersService } from '../users/users.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { ActivityLabel, ActivitySource } from '../../generated/prisma/enums';
 import type { ImportStravaActivityDto } from './dto/import-strava-activity.dto';
+import { StravaTokenCipher } from './strava-token-cipher';
 import { deriveLapIntensities } from '../activities/lap-intensity';
 
 const STRAVA_AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
@@ -25,6 +26,8 @@ const STRAVA_API_BASE = 'https://www.strava.com/api/v3';
 // Strava n'élargit pas le scope d'un token existant.
 const STRAVA_SCOPE = 'activity:read_all,profile:read_all';
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+// Distingue le `state` OAuth des tokens d'accès, signés avec le même secret.
+const OAUTH_STATE_AUDIENCE = 'strava-oauth-state';
 
 interface StravaTokenResponse {
   access_token: string;
@@ -101,6 +104,7 @@ export class StravaService {
     private readonly activitiesService: ActivitiesService,
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
+    private readonly tokenCipher: StravaTokenCipher,
   ) {}
 
   async getAuthorizeUrl(athleteUserId: string): Promise<string> {
@@ -111,7 +115,7 @@ export class StravaService {
 
     const state = this.jwtService.sign(
       { athleteId: athlete.id },
-      { expiresIn: '10m' },
+      { expiresIn: '10m', audience: OAUTH_STATE_AUDIENCE },
     );
 
     const params = new URLSearchParams({
@@ -155,7 +159,9 @@ export class StravaService {
   async handleCallback(code: string, state: string) {
     let athleteId: string;
     try {
-      ({ athleteId } = this.jwtService.verify<{ athleteId: string }>(state));
+      ({ athleteId } = this.jwtService.verify<{ athleteId: string }>(state, {
+        audience: OAUTH_STATE_AUDIENCE,
+      }));
     } catch {
       throw new BadRequestException(
         'État OAuth invalide ou expiré, relancez la connexion Strava',
@@ -167,19 +173,11 @@ export class StravaService {
       code,
     });
 
+    const storedToken = this.toStoredToken(token);
     await this.prisma.stravaToken.upsert({
       where: { athleteId },
-      create: {
-        athleteId,
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-        expiresAt: new Date(token.expires_at * 1000),
-      },
-      update: {
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-        expiresAt: new Date(token.expires_at * 1000),
-      },
+      create: { athleteId, ...storedToken },
+      update: storedToken,
     });
     this.logger.log(`Compte Strava connecté pour l'athlète ${athleteId}`);
 
@@ -478,24 +476,28 @@ export class StravaService {
     }
 
     if (token.expiresAt.getTime() > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-      return token.accessToken;
+      return this.tokenCipher.decrypt(token.accessToken);
     }
 
     const refreshed = await this.exchangeToken({
       grant_type: 'refresh_token',
-      refresh_token: token.refreshToken,
+      refresh_token: this.tokenCipher.decrypt(token.refreshToken),
     });
-    const updated = await this.prisma.stravaToken.update({
+    await this.prisma.stravaToken.update({
       where: { athleteId },
-      data: {
-        accessToken: refreshed.access_token,
-        refreshToken: refreshed.refresh_token,
-        expiresAt: new Date(refreshed.expires_at * 1000),
-      },
+      data: this.toStoredToken(refreshed),
     });
     this.logger.log(`Token Strava rafraîchi pour l'athlète ${athleteId}`);
 
-    return updated.accessToken;
+    return refreshed.access_token;
+  }
+
+  private toStoredToken(token: StravaTokenResponse) {
+    return {
+      accessToken: this.tokenCipher.encrypt(token.access_token),
+      refreshToken: this.tokenCipher.encrypt(token.refresh_token),
+      expiresAt: new Date(token.expires_at * 1000),
+    };
   }
 
   private async exchangeToken(

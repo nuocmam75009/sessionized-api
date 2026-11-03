@@ -156,6 +156,15 @@ export class ActivitiesController {
   getTrack(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.activitiesService.getTrack(user.sub, user.role, id);
   }
+  @ApiOperation({
+    summary: 'Réponse aérobie : facteur d’efficacité et découplage allure/FC',
+    description:
+      "Indicateurs estimés, et seulement sur un effort régulier d'au moins vingt minutes avec trace FC : hors de ces conditions la réponse vaut `{ eligible: false, reason }` — ce n'est pas une erreur. En terrain vallonné le résultat est renvoyé avec `terrainReliable: false`, l'allure brute n'y reflétant plus l'effort.",
+  })
+  @Get(':id/analysis')
+  getAerobicAnalysis(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.activitiesService.getAerobicAnalysis(user.sub, user.role, id);
+  }
 
   @ApiOperation({
     summary:

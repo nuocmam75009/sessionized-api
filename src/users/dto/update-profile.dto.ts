@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import { NormalizeEmail } from '../../common/transforms/normalize-email.transform';
 
 export class UpdateProfileDto {
   @ApiPropertyOptional({ example: 'Lucas' })
@@ -16,6 +17,7 @@ export class UpdateProfileDto {
 
   @ApiPropertyOptional({ example: 'lucas.new@example.com' })
   @IsOptional()
+  @NormalizeEmail()
   @IsEmail()
   email?: string;
 }

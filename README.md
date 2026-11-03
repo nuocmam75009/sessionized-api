@@ -93,6 +93,16 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 - Le token JWT contient `{ sub, role, email }`
 - Le rôle (`ATHLETE` ou `COACH`) est vérifié par un `RolesGuard` sur chaque endpoint
 - Un athlète ne peut jamais accéder aux routes coach et vice versa
+- Emails normalisés en minuscules (inscription, connexion, recherche)
+- `POST /auth/login` et `POST /auth/register` limités à 10 requêtes/minute par IP (le reste de l'API à 300/minute)
+
+### Sécurité HTTP
+
+- En-têtes de sécurité via `helmet` (CSP, HSTS, `nosniff`…)
+- CORS limité aux frontends listés dans `CORS_ORIGINS`, pour l'API REST comme pour le WebSocket du chat
+- Payloads WebSocket du chat validés avec les mêmes règles que les DTO REST ; l'événement `typing` n'est relayé qu'à l'autre participant de la conversation
+- Tokens Strava chiffrés en base (AES-256-GCM, clé `STRAVA_TOKEN_ENCRYPTION_KEY`)
+- Variables d'environnement validées au démarrage (`src/config/env.validation.ts`) : l'API refuse de démarrer si la config est incomplète
 
 ---
 
@@ -114,7 +124,7 @@ L'athlète uploade manuellement son fichier `.fit` depuis son interface. Le back
 Plutôt que d'uploader `.fit` + `.gpx` à la main, un athlète peut connecter son compte Strava et importer directement une activité :
 
 1. `GET /strava/authorize` → génère l'URL OAuth Strava (le `state` est un JWT signé courte durée contenant l'`athleteId`, vérifié au retour)
-2. L'athlète autorise l'accès sur strava.com, redirigé vers `GET /strava/callback` qui échange le `code` contre un token et le stocke (`StravaToken`, même pattern que `CorosToken`)
+2. L'athlète autorise l'accès sur strava.com, redirigé vers `GET /strava/callback` qui échange le `code` contre un token et le stocke chiffré (`StravaToken`, même pattern que `CorosToken`)
 3. `GET /strava/activities` → liste les activités Strava récentes (pour un sélecteur côté front), avec un flag `alreadyImported`
 4. `POST /strava/activities/:id/import` → récupère laps (`/activities/:id/laps`) + trace GPS et capteurs (`/activities/:id/streams`) auprès de l'API Strava, et alimente les mêmes tables `Activity`/`Lap`/`TrackPoint` que le pipeline `.fit` — aucun fichier `.gpx` séparé n'est nécessaire, Strava fournit position + FC/cadence/puissance dans un seul stream synchronisé.
 
@@ -143,7 +153,12 @@ Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est
 | `JWT_EXPIRES_IN` | Non (défaut `7d`) | Durée de validité des tokens |
 | `REDIS_URL` | Oui | Redis qui compte les tentatives de connexion (5 par compte et par 15 min). En local : `redis://localhost:6379` avec `docker compose up -d redis` ; en prod : Redis managé, URL en `rediss://` (TLS). Si Redis tombe, l'API continue de fonctionner sans cette limitation |
 | `PORT` | Non (défaut `3000`) | Mets `3001` pour matcher les frontends (voir plus bas) |
+| `NODE_ENV` | Prod : `production` | Active les contrôles de config stricts, masque Swagger, fait confiance au proxy de l'hébergeur |
+| `CORS_ORIGINS` | Prod : oui (dev : frontends locaux) | URLs des frontends autorisés, séparées par des virgules |
+| `SWAGGER_ENABLED` | Non (défaut : `true` en dev, `false` en prod) | Force l'affichage de `/docs` |
+| `TRUST_PROXY` | Non (défaut : `1` en prod, `0` en dev) | Nombre de reverse proxies devant l'API (IP réelle du client pour le rate limiting) |
 | `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` / `STRAVA_REDIRECT_URI` | Non | Uniquement pour tester les routes `/strava/*` — créer une app sur https://www.strava.com/settings/api |
+| `STRAVA_TOKEN_ENCRYPTION_KEY` | Oui si Strava est utilisé | Clé AES-256 (32 octets en base64) qui chiffre les tokens Strava en base — `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Même clé pour tous ceux qui partagent une base** : sinon les tokens des autres ne se déchiffrent plus |
 | `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
 | `FRONTEND_URLS` | Non (défaut `http://localhost:3000,http://localhost:3002`) | Liste d'origines autorisées en CORS, séparées par des virgules. **À définir en prod** avec les vraies URLs des frontends déployés. |
 

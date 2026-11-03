@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { StravaService } from './strava.service';
+import { StravaTokenCipher } from './strava-token-cipher';
 import { StravaController } from './strava.controller';
 import { UsersModule } from '../users/users.module';
 import { ActivitiesModule } from '../activities/activities.module';
@@ -19,6 +20,6 @@ import { ActivitiesModule } from '../activities/activities.module';
     }),
   ],
   controllers: [StravaController],
-  providers: [StravaService],
+  providers: [StravaService, StravaTokenCipher],
 })
 export class StravaModule {}
