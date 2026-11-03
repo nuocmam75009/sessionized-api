@@ -1,5 +1,11 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiTags,
+  ApiTooManyRequestsResponse,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -19,6 +25,11 @@ export class AuthController {
   }
 
   @ApiOperation({ summary: 'Se connecter et obtenir un JWT' })
+  @ApiUnauthorizedResponse({ description: 'Identifiants invalides' })
+  @ApiTooManyRequestsResponse({
+    description:
+      "Plus de 5 tentatives en 15 minutes sur ce compte : connexion verrouillée jusqu'à la fin de la fenêtre",
+  })
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);

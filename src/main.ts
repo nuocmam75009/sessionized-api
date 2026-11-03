@@ -3,10 +3,18 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
+const DEFAULT_DEV_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3002',
+];
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configuredOrigins = process.env.FRONTEND_URLS?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: ['http://localhost:3000', 'http://localhost:3002'],
+    origin: configuredOrigins?.length ? configuredOrigins : DEFAULT_DEV_ORIGINS,
     credentials: true,
   });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

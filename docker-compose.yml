@@ -1,0 +1,17 @@
+# Services d'appui pour le développement local.
+# La base PostgreSQL n'est pas ici : Neon partagé ou `npx prisma dev` (voir README).
+#
+#   docker compose up -d redis
+services:
+  redis:
+    image: redis:8-alpine
+    # Les compteurs de tentatives de connexion sont éphémères : pas de
+    # persistance sur disque (ni snapshot RDB, ni journal AOF).
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

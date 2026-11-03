@@ -16,6 +16,7 @@ Sessionized met en relation des coachs et des athlètes autour de l'analyse de s
 |---|---|
 | Framework | NestJS (Node.js + TypeScript) |
 | Base de données | PostgreSQL |
+| Base clé-valeur | Redis (ioredis) — limitation des tentatives de connexion |
 | ORM | Prisma |
 | Authentification | JWT maison (Passport.js + bcrypt) |
 | Upload fichiers | Multer |
@@ -140,9 +141,11 @@ Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est
 | `DATABASE_URL_UNPOOLED` | Non | Connexion **directe**, utilisée uniquement par `npm run migrate:*` (nécessaire avec Neon, inutile avec `prisma dev` en local) |
 | `JWT_SECRET` | Oui | Secret de signature des tokens JWT — génère-en un avec `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `JWT_EXPIRES_IN` | Non (défaut `7d`) | Durée de validité des tokens |
+| `REDIS_URL` | Oui | Redis qui compte les tentatives de connexion (5 par compte et par 15 min). En local : `redis://localhost:6379` avec `docker compose up -d redis` ; en prod : Redis managé, URL en `rediss://` (TLS). Si Redis tombe, l'API continue de fonctionner sans cette limitation |
 | `PORT` | Non (défaut `3000`) | Mets `3001` pour matcher les frontends (voir plus bas) |
 | `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` / `STRAVA_REDIRECT_URI` | Non | Uniquement pour tester les routes `/strava/*` — créer une app sur https://www.strava.com/settings/api |
 | `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
+| `FRONTEND_URLS` | Non (défaut `http://localhost:3000,http://localhost:3002`) | Liste d'origines autorisées en CORS, séparées par des virgules. **À définir en prod** avec les vraies URLs des frontends déployés. |
 
 > Stripe et Coros sont mentionnés dans la stack technique cible du projet mais **pas encore implémentés** dans le code — aucune variable d'environnement associée n'est donc requise pour l'instant.
 
@@ -177,6 +180,9 @@ npm install
 # Configurer .env (voir section précédente)
 cp .env.example .env
 
+# Démarrer Redis (Docker requis)
+docker compose up -d redis
+
 # Appliquer les migrations Prisma (bascule automatiquement sur la connexion directe)
 npm run migrate:deploy
 
@@ -187,6 +193,21 @@ npm run start:dev
 L'API est disponible sur `http://localhost:3001`, la doc Swagger sur `http://localhost:3001/docs`.
 
 > Pour créer une nouvelle migration après avoir modifié `prisma/schema.prisma`, utilise `npm run migrate:dev` (équivalent de `prisma migrate dev`, mais avec la bonne connexion).
+
+---
+
+## Déploiement en production
+
+Un `Dockerfile` multi-stage est fourni à la racine :
+
+```bash
+docker build -t sessionized-api .
+docker run -p 3000:3000 --env-file .env sessionized-api
+```
+
+Au démarrage, le conteneur applique automatiquement les migrations Prisma (`migrate:deploy`) avant de lancer le serveur — inutile de le faire manuellement. Variables d'environnement obligatoires à fournir à la plateforme d'hébergement : `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `JWT_SECRET`, `REDIS_URL`, `FRONTEND_URLS` (voir tableau ci-dessus).
+
+> Dans un conteneur, `localhost` désigne le conteneur lui-même : pour joindre le Redis de `docker compose` depuis `docker run`, utilise `REDIS_URL=redis://host.docker.internal:6379`.
 
 ---
 

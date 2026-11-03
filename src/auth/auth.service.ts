@@ -1,5 +1,7 @@
 import {
   ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -7,6 +9,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
+import { LoginAttemptsService } from './login-attempts.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtPayload } from './types/jwt-payload.interface';
@@ -27,6 +30,7 @@ export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly loginAttempts: LoginAttemptsService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -58,6 +62,21 @@ export class AuthService {
   async login(dto: LoginDto) {
     this.logger.log(`Tentative de connexion : ${dto.email}`);
 
+    // Comptée avant de vérifier le mot de passe : un compte verrouillé ne
+    // déclenche ni requête SQL ni calcul bcrypt. Le compteur existe aussi
+    // pour les emails inconnus, donc la réponse 429 ne révèle pas si un
+    // compte existe.
+    const retryAfterSeconds = await this.loginAttempts.consumeAttempt(
+      dto.email,
+    );
+    if (retryAfterSeconds > 0) {
+      this.logger.warn(`Connexion refusée : trop de tentatives (${dto.email})`);
+      throw new HttpException(
+        `Trop de tentatives de connexion. Réessayez dans ${Math.ceil(retryAfterSeconds / 60)} min.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.usersService.findByEmail(dto.email);
     const passwordMatches =
       user && (await bcrypt.compare(dto.password, user.password));
@@ -69,6 +88,7 @@ export class AuthService {
       throw new UnauthorizedException('Identifiants invalides');
     }
 
+    await this.loginAttempts.reset(dto.email);
     this.logger.log(`Connexion réussie : ${user.email} (id=${user.id})`);
     return this.buildToken(user);
   }

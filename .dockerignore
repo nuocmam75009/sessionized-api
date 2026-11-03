@@ -1,0 +1,17 @@
+node_modules
+dist
+generated
+coverage
+.env
+.env.*
+!.env.example
+.git
+.vscode
+.idea
+# Configuration d'éditeurs et d'agents : inutile dans l'image, et
+# .claude/skills contient des jonctions Windows que Docker refuse de copier.
+.claude
+.agents
+.windsurf
+npm-debug.log*
+*.fit
