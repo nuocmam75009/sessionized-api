@@ -553,7 +553,9 @@ export class ActivitiesService {
     }
     await this.assertActivityAccess(userId, role, activity);
     if (!activity.fitFileData) {
-      throw new NotFoundException('Aucun fichier .fit associé à cette activité');
+      throw new NotFoundException(
+        'Aucun fichier .fit associé à cette activité',
+      );
     }
 
     return { buffer: Buffer.from(activity.fitFileData), filename: `${id}.fit` };
@@ -569,7 +571,9 @@ export class ActivitiesService {
     }
     await this.assertActivityAccess(userId, role, activity);
     if (!activity.gpxFileData) {
-      throw new NotFoundException('Aucun fichier .gpx associé à cette activité');
+      throw new NotFoundException(
+        'Aucun fichier .gpx associé à cette activité',
+      );
     }
 
     return { buffer: Buffer.from(activity.gpxFileData), filename: `${id}.gpx` };
@@ -822,7 +826,10 @@ function buildHeartRateZoneDefs(highBounds: number[]): HeartRateZoneDef[] {
 }
 
 function toActivityDto<
-  T extends { fitFileData?: Uint8Array | null; gpxFileData?: Uint8Array | null },
+  T extends {
+    fitFileData?: Uint8Array | null;
+    gpxFileData?: Uint8Array | null;
+  },
 >(
   activity: T,
 ): Omit<T, 'fitFileData' | 'gpxFileData'> & {
