@@ -44,4 +44,12 @@ EXPOSE 3000
 # fourni par BusyBox dans l'image Alpine.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-3000}/health" || exit 1
-CMD ["sh", "-c", "node scripts/migrate.js deploy && node dist/src/main.js"]
+
+# Le conteneur ne lance que l'API. Les migrations sont une étape de
+# déploiement distincte, exécutée une fois avec la même image avant de
+# démarrer la nouvelle version (cf. README, « Déploiement ») :
+#   docker run --rm --env-file .env.production <image> node scripts/migrate.js deploy
+# Au démarrage, l'API vérifie qu'aucune migration livrée ne manque en base.
+# Forme exec : node est le PID 1 et reçoit directement le SIGTERM de
+# `docker stop`, donc l'arrêt propre (enableShutdownHooks) a bien lieu.
+CMD ["node", "dist/src/main.js"]

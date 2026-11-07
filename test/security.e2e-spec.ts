@@ -19,7 +19,8 @@ import { E2E_JWT_SECRET } from './e2e-env';
 // une exécution précédente (en base, ni dans les compteurs Redis de tentatives
 // de connexion), et suppression ciblée à la fin.
 
-const PASSWORD = 'correct-horse-battery';
+// Conforme à la politique de mots de passe (src/auth/password-policy.ts).
+const PASSWORD = 'Correct-horse-battery-7';
 
 interface Account {
   email: string;
@@ -51,7 +52,9 @@ describe('Sécurité de l’API (e2e)', () => {
     const email = `${emailPrefix}${label}@example.test`;
     const res = await request(server)
       .post('/auth/register')
-      .send({ email, password: PASSWORD, role })
+      // Consentement aux données de santé : requis pour un athlète, ignoré
+      // pour un coach (RegisterDto).
+      .send({ email, password: PASSWORD, role, healthDataConsent: true })
       .expect(201);
     const body = res.body as { accessToken: string; user: { sub: string } };
     return { email, token: body.accessToken, userId: body.user.sub };
@@ -308,6 +311,41 @@ describe('Sécurité de l’API (e2e)', () => {
         .post('/auth/login')
         .send({ email: athleteB.email, password: PASSWORD })
         .expect(429);
+    });
+  });
+
+  // Recommandation CNIL n° 2022-100, cas n° 2 : le détail des règles est
+  // testé dans password-policy.spec.ts, ici leur application à l'inscription.
+  describe('A07 — Politique de mots de passe (CNIL)', () => {
+    const registerWith = (label: string, password: string) =>
+      request(server)
+        .post('/auth/register')
+        .send({
+          email: `${emailPrefix}${label}@example.test`,
+          password,
+          role: Role.ATHLETE,
+          healthDataConsent: true,
+        });
+
+    it('mot de passe trop faible : 400, avec la règle à respecter', async () => {
+      const res = await registerWith('weak', 'motdepasse').expect(400);
+
+      expect(JSON.stringify(res.body)).toContain('Mot de passe trop faible');
+      expect(
+        await prisma.user.findUnique({
+          where: { email: `${emailPrefix}weak@example.test` },
+        }),
+      ).toBeNull();
+    });
+
+    it('mot de passe courant, même composé de 4 catégories : 400', async () => {
+      const res = await registerWith('common', 'Azerty123!').expect(400);
+
+      expect(JSON.stringify(res.body)).toContain('trop courant');
+    });
+
+    it('phrase de passe de 5 mots : 201', async () => {
+      await registerWith('passphrase', 'le vélo double la péniche').expect(201);
     });
   });
 

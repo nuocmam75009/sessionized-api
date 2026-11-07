@@ -71,6 +71,15 @@ jobs:
       - name: Tests e2e et de sécurité
         run: npm run test:e2e
 
+      # Les tests e2e viennent d'appliquer toutes les migrations sur une base
+      # vierge : elles passent donc de zéro. Le schéma obtenu doit en plus être
+      # exactement celui de schema.prisma ; un modèle modifié sans migration
+      # fait échouer le pipeline (code de sortie 2).
+      - name: Migrations conformes au schéma Prisma
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+        env:
+          DATABASE_URL: postgresql://sessionized:sessionized@localhost:5433/sessionized_test
+
       # Seules les dépendances embarquées dans l'image de production bloquent ;
       # celles de développement sont suivies par Dependabot.
       - name: Audit des dépendances de production

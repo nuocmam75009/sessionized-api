@@ -51,6 +51,9 @@ export class AuthService {
       role: dto.role,
       firstName: dto.firstName,
       lastName: dto.lastName,
+      // RegisterDto a déjà refusé un athlète sans consentement : on en garde
+      // ici la preuve, datée.
+      healthDataConsentAt: dto.role === Role.ATHLETE ? new Date() : undefined,
     });
     this.logger.log(
       `Compte créé : ${user.email} (${user.role}, id=${user.id})`,
