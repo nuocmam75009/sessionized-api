@@ -228,6 +228,10 @@ npm run test:e2e
 - [test/security.e2e-spec.ts](test/security.e2e-spec.ts) couvre le contrôle d'accès (IDOR, rôles, élévation de privilège), les jetons JWT (expiré, modifié, mal signé, `alg: none`, `state` OAuth réutilisé), la force brute sur la connexion, la validation des entrées et des uploads, les en-têtes de sécurité et le CORS.
 - `test:e2e` lance Jest avec `--experimental-vm-modules` : le client Prisma 7 charge son moteur de requêtes (WASM) par un `import()` dynamique, que Jest refuse sans ce drapeau.
 
+### Intégration continue
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) s'exécute sur chaque PR et chaque push sur `master` : `npm ci`, lint (`npm run lint:check`, sans correction automatique), build, tests unitaires avec couverture, tests e2e sur des services PostgreSQL et Redis jetables, audit des dépendances de production (`npm audit --omit=dev --audit-level=high`), puis construction de l'image Docker. Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) propose chaque semaine les mises à jour npm, GitHub Actions et de l'image Node.
+
 ---
 
 ## Déploiement

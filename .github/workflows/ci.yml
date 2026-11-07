@@ -1,0 +1,96 @@
+# Intégration continue de l'API : chaque PR et chaque push sur master doivent
+# passer l'analyse statique, le build, les tests unitaires et e2e, l'audit des
+# dépendances de production, puis la construction de l'image Docker.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# Un nouveau push sur la même branche annule l'exécution en cours : seul le
+# dernier commit compte.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Le pipeline ne fait que lire le dépôt : aucun droit d'écriture pour le jeton.
+permissions:
+  contents: read
+
+jobs:
+  quality-and-tests:
+    name: Qualité et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Mêmes services que `docker compose up -d redis postgres-test` en local :
+    # les tests e2e tournent sur un vrai PostgreSQL et un vrai Redis, jetables.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sessionized
+          POSTGRES_PASSWORD: sessionized
+          POSTGRES_DB: sessionized_test
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sessionized -d sessionized_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` installe exactement le package-lock.json et échoue s'il ne
+      # correspond plus au package.json : même arbre de dépendances partout.
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Analyse statique (ESLint, Prettier)
+        run: npm run lint:check
+
+      - name: Build (compilation TypeScript)
+        run: npm run build
+
+      - name: Tests unitaires et couverture
+        run: npm run test:cov
+
+      # Aucun secret requis : test/e2e-env.ts fournit une configuration de
+      # test et refuse toute base non locale.
+      - name: Tests e2e et de sécurité
+        run: npm run test:e2e
+
+      # Seules les dépendances embarquées dans l'image de production bloquent ;
+      # celles de développement sont suivies par Dependabot.
+      - name: Audit des dépendances de production
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Publier le rapport de couverture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
+  docker:
+    name: Image Docker
+    needs: quality-and-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire l'image de production
+        run: docker build -t sessionized-api:${{ github.sha }} .
