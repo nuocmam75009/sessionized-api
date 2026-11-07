@@ -212,6 +212,24 @@ L'API est disponible sur `http://localhost:3001`, la doc Swagger sur `http://loc
 
 ---
 
+## Tests
+
+```bash
+# Tests unitaires (aucun service requis)
+npm test
+npm run test:cov        # avec rapport de couverture dans coverage/
+
+# Tests e2e et de sécurité : vraie application, vrai PostgreSQL, vrai Redis
+docker compose up -d redis postgres-test
+npm run test:e2e
+```
+
+- Les tests e2e tournent sur le conteneur `postgres-test` (port 5433, données en mémoire), **jamais sur la base Neon du `.env`** : `test/e2e-env.ts` refuse toute base non locale. Les migrations y sont appliquées automatiquement avant les tests. `E2E_DATABASE_URL` et `E2E_REDIS_URL` permettent de viser d'autres services locaux.
+- [test/security.e2e-spec.ts](test/security.e2e-spec.ts) couvre le contrôle d'accès (IDOR, rôles, élévation de privilège), les jetons JWT (expiré, modifié, mal signé, `alg: none`, `state` OAuth réutilisé), la force brute sur la connexion, la validation des entrées et des uploads, les en-têtes de sécurité et le CORS.
+- `test:e2e` lance Jest avec `--experimental-vm-modules` : le client Prisma 7 charge son moteur de requêtes (WASM) par un `import()` dynamique, que Jest refuse sans ce drapeau.
+
+---
+
 ## Déploiement
 
 L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railway, Fly… — pas d'hébergement serverless type Vercel. Garder **une seule instance** (socket.io sans adapter Redis ne se partage pas entre instances).
