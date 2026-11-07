@@ -103,6 +103,7 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 - Payloads WebSocket du chat validés avec les mêmes règles que les DTO REST ; l'événement `typing` n'est relayé qu'à l'autre participant de la conversation
 - Tokens Strava chiffrés en base (AES-256-GCM, clé `STRAVA_TOKEN_ENCRYPTION_KEY`)
 - Variables d'environnement validées au démarrage (`src/config/env.validation.ts`) : l'API refuse de démarrer si la config est incomplète
+- Swagger (`/docs`) masqué par défaut en production
 - Quota de l'API Strava (partagé par tous les athlètes) : un 429 de Strava renvoie un 503 `STRAVA_RATE_LIMITED` avec `retryAfterSec`, et suspend les appels jusqu'à la réinitialisation de la fenêtre (quart d'heure suivant, ou minuit UTC si le quota du jour est épuisé)
 
 ---
