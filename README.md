@@ -221,7 +221,7 @@ L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railwa
 | Build | `npm ci --include=dev && npm run build` |
 | Migrations (avant chaque démarrage) | `npm run migrate:deploy` |
 | Démarrage | `npm run start:prod` |
-| Health check | `GET /` |
+| Health check | `GET /health` : 200 si la base répond (`status` `ok`, ou `degraded` si Redis est en panne), 503 sinon |
 
 - `--include=dev` est nécessaire : avec `NODE_ENV=production`, npm n'installe pas les devDependencies, dont `@nestjs/cli` qui sert au build.
 - Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée) et `DATABASE_URL_UNPOOLED` (directe, pour les migrations).
@@ -238,6 +238,8 @@ docker run -p 3000:3000 --env-file .env sessionized-api
 ```
 
 Au démarrage, le conteneur applique automatiquement les migrations Prisma (`migrate:deploy`) avant de lancer le serveur. L'image définit `NODE_ENV=production` : il faut donc les mêmes variables que ci-dessus.
+
+Le process tourne sous l'utilisateur non privilégié `node` (uid 1000), et un `HEALTHCHECK` interroge `GET /health` toutes les 30 secondes : `docker ps` affiche `healthy`, ou `unhealthy` après trois échecs.
 
 > Dans un conteneur, `localhost` désigne le conteneur lui-même : pour joindre le Redis de `docker compose` depuis `docker run`, utilise `REDIS_URL=redis://host.docker.internal:6379`.
 

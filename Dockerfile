@@ -34,5 +34,14 @@ COPY prisma ./prisma
 COPY scripts ./scripts
 COPY --from=build /app/dist ./dist
 
+# Utilisateur non privilégié fourni par l'image Node (uid 1000) : une faille
+# exploitée dans l'API ne donne pas les droits root dans le conteneur. Les
+# fichiers copiés restent à root, donc non modifiables par le process.
+USER node
+
 EXPOSE 3000
+# Sonde Docker sur GET /health (503 si la base est injoignable). `wget` est
+# fourni par BusyBox dans l'image Alpine.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-3000}/health" || exit 1
 CMD ["sh", "-c", "node scripts/migrate.js deploy && node dist/src/main.js"]

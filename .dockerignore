@@ -15,3 +15,5 @@ coverage
 .windsurf
 npm-debug.log*
 *.fit
+# Fiches de révision RNCP : locales, non versionnées.
+rncp
