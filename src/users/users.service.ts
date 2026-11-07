@@ -18,6 +18,7 @@ export interface CreateUserInput {
   role: Role;
   firstName?: string;
   lastName?: string;
+  healthDataConsentAt?: Date;
 }
 
 @Injectable()
@@ -46,7 +47,14 @@ export class UsersService {
     return this.prisma.coachProfile.findUnique({ where: { userId } });
   }
 
-  create({ email, password, role, firstName, lastName }: CreateUserInput) {
+  create({
+    email,
+    password,
+    role,
+    firstName,
+    lastName,
+    healthDataConsentAt,
+  }: CreateUserInput) {
     return this.prisma.user.create({
       data: {
         email,
@@ -54,6 +62,7 @@ export class UsersService {
         role,
         firstName,
         lastName,
+        healthDataConsentAt,
         athleteProfile: role === Role.ATHLETE ? { create: {} } : undefined,
         coachProfile: role === Role.COACH ? { create: {} } : undefined,
       },
@@ -70,6 +79,7 @@ export class UsersService {
         lastName: true,
         role: true,
         createdAt: true,
+        healthDataConsentAt: true,
         athleteProfile: {
           select: {
             id: true,

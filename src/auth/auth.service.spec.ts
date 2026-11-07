@@ -77,3 +77,51 @@ describe('AuthService.login', () => {
     });
   });
 });
+
+describe('AuthService.register', () => {
+  let usersService: { findByEmail: jest.Mock; create: jest.Mock };
+  let service: AuthService;
+
+  beforeEach(() => {
+    usersService = {
+      findByEmail: jest.fn().mockResolvedValue(null),
+      create: jest.fn((input: { email: string; role: Role }) =>
+        Promise.resolve({ id: 'user-1', email: input.email, role: input.role }),
+      ),
+    };
+    service = new AuthService(
+      usersService as unknown as UsersService,
+      { sign: jest.fn().mockReturnValue('jwt') } as unknown as JwtService,
+      {} as LoginAttemptsService,
+    );
+  });
+
+  it('athlète : enregistre la date du consentement aux données de santé', async () => {
+    const before = Date.now();
+
+    await service.register({
+      email: 'camille@example.com',
+      password: 'Course-matinale-2026',
+      role: Role.ATHLETE,
+      healthDataConsent: true,
+    });
+
+    const [input] = usersService.create.mock.calls[0] as [
+      { healthDataConsentAt?: Date },
+    ];
+    expect(input.healthDataConsentAt).toBeInstanceOf(Date);
+    expect(input.healthDataConsentAt!.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('coach : aucune date de consentement', async () => {
+    await service.register({
+      email: 'coach@example.com',
+      password: 'Course-matinale-2026',
+      role: Role.COACH,
+    });
+
+    expect(usersService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ healthDataConsentAt: undefined }),
+    );
+  });
+});

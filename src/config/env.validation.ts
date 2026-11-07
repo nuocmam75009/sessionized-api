@@ -92,6 +92,14 @@ export function validateEnv(
     requireVar('STRAVA_REDIRECT_URI', reason);
     requireVar('STRAVA_TOKEN_ENCRYPTION_KEY', reason);
     requireVar('ATHLETE_APP_URL', reason);
+  } else if (read('STRAVA_CLIENT_ID')) {
+    // En dev aussi, la clé est indispensable dès que Strava est activé : sans
+    // elle, l'API démarrait, puis chaque synchronisation échouait en 500
+    // pendant que l'athlète restait affiché « connecté ».
+    requireVar(
+      'STRAVA_TOKEN_ENCRYPTION_KEY',
+      ' quand STRAVA_CLIENT_ID est défini',
+    );
   }
 
   if (errors.length > 0) {

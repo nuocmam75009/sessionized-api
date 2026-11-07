@@ -105,6 +105,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Preuve du consentement explicite au traitement des données de santé
+  // (art. 7 et 9 du RGPD) : date à laquelle l'athlète l'a donné. Nul pour un
+  // coach, et pour un athlète inscrit avant que la case existe : le front lui
+  // demande alors son accord avant d'afficher quoi que ce soit.
+  healthDataConsentAt DateTime?
+
   athleteProfile AthleteProfile?
   coachProfile   CoachProfile?
   messages       Message[]

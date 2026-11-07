@@ -1,0 +1,26 @@
+# Propose chaque semaine une PR par mise à jour de dépendance ; le pipeline CI
+# vérifie qu'elle ne casse rien avant la fusion.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Paquets publiés ensemble : une seule PR pour garder des versions alignées.
+    groups:
+      nestjs:
+        patterns: ["@nestjs/*"]
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Image de base du Dockerfile (node:22-alpine).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

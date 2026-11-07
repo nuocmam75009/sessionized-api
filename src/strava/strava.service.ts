@@ -15,7 +15,15 @@ import { UsersService } from '../users/users.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { ActivityLabel, ActivitySource } from '../../generated/prisma/enums';
 import type { ImportStravaActivityDto } from './dto/import-strava-activity.dto';
-import { StravaTokenCipher } from './strava-token-cipher';
+import {
+  StravaTokenCipher,
+  StravaTokenDecryptionError,
+} from './strava-token-cipher';
+import { StravaReconnectRequiredException } from './strava-reconnect-required.exception';
+import {
+  StravaRateLimitedException,
+  nextRateLimitReset,
+} from './strava-rate-limit';
 import { deriveLapIntensities } from '../activities/lap-intensity';
 
 const STRAVA_AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
@@ -97,6 +105,12 @@ interface StravaStreamSet {
 @Injectable()
 export class StravaService {
   private readonly logger = new Logger(StravaService.name);
+  // Le quota Strava est celui de l'application, partagé par tous les athlètes :
+  // une fois dépassé, chaque appel serait refusé jusqu'à la réinitialisation
+  // de la fenêtre. Les appels sont donc suspendus jusque-là au lieu de laisser
+  // chaque sync se faire refuser à son tour. En mémoire du process, ce qui
+  // suffit tant que l'API tourne en une seule instance (cf. README).
+  private rateLimitedUntil = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -282,6 +296,15 @@ export class StravaService {
         });
         importedCount++;
       } catch (err) {
+        // Quota épuisé : les imports restants échoueraient tous. Le sync
+        // s'arrête en erreur plutôt que d'annoncer un succès incomplet ; le
+        // prochain reprendra les activités manquantes.
+        if (err instanceof StravaRateLimitedException) {
+          this.logger.warn(
+            `Sync Strava interrompu par la limite de débit : ${importedCount}/${newActivities.length} nouvelle(s) activité(s) importée(s) (athlète=${athlete.id})`,
+          );
+          throw err;
+        }
         this.logger.warn(
           `Sync Strava : échec import activité ${activity.id} (athlète=${athlete.id}) : ${String(err)}`,
         );
@@ -459,8 +482,14 @@ export class StravaService {
       });
       this.logger.log(`Zones Strava synchronisées pour l'athlète ${athleteId}`);
     } catch (err) {
+      // Un quota épuisé n'a rien à voir avec le scope du token : ne pas
+      // aiguiller vers une reconnexion qui n'y changerait rien.
+      const hint =
+        err instanceof StravaRateLimitedException
+          ? 'limite de débit Strava atteinte, nouvel essai au prochain sync'
+          : 'reconnexion avec le scope profile:read_all peut être nécessaire';
       this.logger.warn(
-        `Sync des zones Strava échouée pour l'athlète ${athleteId} (reconnexion avec le scope profile:read_all peut être nécessaire) : ${String(err)}`,
+        `Sync des zones Strava échouée pour l'athlète ${athleteId} (${hint}) : ${String(err)}`,
       );
     }
   }
@@ -476,12 +505,12 @@ export class StravaService {
     }
 
     if (token.expiresAt.getTime() > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-      return this.tokenCipher.decrypt(token.accessToken);
+      return this.decryptStoredToken(token.accessToken, athleteId);
     }
 
     const refreshed = await this.exchangeToken({
       grant_type: 'refresh_token',
-      refresh_token: this.tokenCipher.decrypt(token.refreshToken),
+      refresh_token: this.decryptStoredToken(token.refreshToken, athleteId),
     });
     await this.prisma.stravaToken.update({
       where: { athleteId },
@@ -490,6 +519,18 @@ export class StravaService {
     this.logger.log(`Token Strava rafraîchi pour l'athlète ${athleteId}`);
 
     return refreshed.access_token;
+  }
+
+  // Un token illisible ne se réparera pas seul : l'athlète doit se reconnecter
+  // pour en obtenir un nouveau, chiffré avec la clé actuelle.
+  private decryptStoredToken(stored: string, athleteId: string): string {
+    try {
+      return this.tokenCipher.decrypt(stored);
+    } catch (err) {
+      if (!(err instanceof StravaTokenDecryptionError)) throw err;
+      this.logger.warn(`${err.message} (athlète=${athleteId})`);
+      throw new StravaReconnectRequiredException('token illisible');
+    }
   }
 
   private toStoredToken(token: StravaTokenResponse) {
@@ -515,10 +556,19 @@ export class StravaService {
       }),
     });
 
+    if (response.status === 429) {
+      throw this.rateLimited(response, 'échange de token');
+    }
     if (!response.ok) {
       this.logger.error(
         `Échec de l'échange de token Strava : ${response.status} ${await response.text()}`,
       );
+      // Strava répond 400 à un refresh token invalide (accès révoqué par
+      // l'athlète depuis Strava). Un 401 viserait nos identifiants client :
+      // erreur de configuration, qu'une reconnexion ne réparerait pas.
+      if (params.grant_type === 'refresh_token' && response.status === 400) {
+        throw new StravaReconnectRequiredException('refresh token refusé');
+      }
       throw new BadGatewayException(
         "Échec de la communication avec l'API Strava",
       );
@@ -528,20 +578,50 @@ export class StravaService {
   }
 
   private async stravaGet<T>(path: string, accessToken: string): Promise<T> {
+    if (Date.now() < this.rateLimitedUntil) {
+      throw new StravaRateLimitedException(new Date(this.rateLimitedUntil));
+    }
+
     const response = await fetch(`${STRAVA_API_BASE}${path}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
+    if (response.status === 429) {
+      throw this.rateLimited(response, path);
+    }
     if (!response.ok) {
       this.logger.error(
         `Échec de l'appel Strava ${path} : ${response.status} ${await response.text()}`,
       );
+      // Access token refusé alors qu'il n'est pas expiré : l'athlète a retiré
+      // l'accès à Sessionized depuis Strava.
+      if (response.status === 401) {
+        throw new StravaReconnectRequiredException('accès refusé par Strava');
+      }
       throw new BadGatewayException(
         "Échec de la communication avec l'API Strava",
       );
     }
 
     return (await response.json()) as T;
+  }
+
+  // Suspend les appels à l'API Strava jusqu'à la réinitialisation du quota.
+  // L'échange de token n'est jamais suspendu : un code OAuth non échangé
+  // obligerait l'athlète à refaire toute la connexion.
+  private rateLimited(
+    response: Response,
+    context: string,
+  ): StravaRateLimitedException {
+    const resetAt = nextRateLimitReset(response.headers, new Date());
+    this.rateLimitedUntil = resetAt.getTime();
+    this.logger.error(
+      `Limite de débit Strava atteinte (${context}) — usage « 15 min,jour » : ` +
+        `global ${response.headers.get('x-ratelimit-usage') ?? '?'}/${response.headers.get('x-ratelimit-limit') ?? '?'}, ` +
+        `lecture ${response.headers.get('x-readratelimit-usage') ?? '?'}/${response.headers.get('x-readratelimit-limit') ?? '?'} ; ` +
+        `appels suspendus jusqu'à ${resetAt.toISOString()}`,
+    );
+    return new StravaRateLimitedException(resetAt);
   }
 }
 
