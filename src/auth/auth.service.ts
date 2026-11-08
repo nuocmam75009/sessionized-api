@@ -77,8 +77,14 @@ export class AuthService {
     );
     if (retryAfterSeconds > 0) {
       this.logger.warn(`Connexion refusée : trop de tentatives (${dto.email})`);
+      // retryAfterSec : le délai en clair pour les clients, qui affichent
+      // leur propre message (le front athlète est en anglais).
       throw new HttpException(
-        `Trop de tentatives de connexion. Réessayez dans ${Math.ceil(retryAfterSeconds / 60)} min.`,
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Trop de tentatives de connexion. Réessayez dans ${Math.ceil(retryAfterSeconds / 60)} min.`,
+          retryAfterSec: retryAfterSeconds,
+        },
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

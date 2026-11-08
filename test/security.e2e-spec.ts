@@ -367,10 +367,14 @@ describe('Sécurité de l’API (e2e)', () => {
           .expect(401);
       }
 
-      await request(server)
+      const locked = await request(server)
         .post('/auth/login')
         .send({ email: athleteB.email, password: PASSWORD })
         .expect(429);
+      // Délai restant, pour que les fronts affichent la raison du refus.
+      const { retryAfterSec } = locked.body as { retryAfterSec: number };
+      expect(retryAfterSec).toBeGreaterThan(14 * 60);
+      expect(retryAfterSec).toBeLessThanOrEqual(15 * 60);
     });
   });
 

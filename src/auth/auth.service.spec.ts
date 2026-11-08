@@ -1,4 +1,8 @@
-import { HttpStatus, UnauthorizedException } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
@@ -62,9 +66,14 @@ describe('AuthService.login', () => {
   it('renvoie 429 sans interroger la base quand le compte est verrouillé', async () => {
     loginAttempts.consumeAttempt.mockResolvedValue(600);
 
-    await expect(service.login(CREDENTIALS)).rejects.toMatchObject({
+    const error = await service.login(CREDENTIALS).catch((e: unknown) => e);
+    expect(error).toMatchObject({
       status: HttpStatus.TOO_MANY_REQUESTS,
       message: 'Trop de tentatives de connexion. Réessayez dans 10 min.',
+    });
+    // Délai exploitable par les clients, qui affichent leur propre message.
+    expect((error as HttpException).getResponse()).toMatchObject({
+      retryAfterSec: 600,
     });
 
     expect(usersService.findByEmail).not.toHaveBeenCalled();
