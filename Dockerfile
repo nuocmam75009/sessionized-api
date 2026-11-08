@@ -1,5 +1,5 @@
 # ---- Dépendances + génération du client Prisma ----
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
@@ -15,7 +15,7 @@ COPY . .
 RUN npm run build
 
 # ---- Dépendances de production uniquement ----
-FROM node:22-alpine AS prod-deps
+FROM node:25-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
@@ -23,7 +23,7 @@ COPY prisma.config.ts tsconfig.json ./
 RUN npm ci --omit=dev
 
 # ---- Image finale ----
-FROM node:22-alpine AS runtime
+FROM node:25-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
