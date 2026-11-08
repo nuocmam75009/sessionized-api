@@ -1,12 +1,16 @@
 # Sessionized API
 
-Backend NestJS de la plateforme **Sessionized** — application de coaching sportif permettant à un coach de planifier des séances et à un athlète d'analyser ses performances via l'upload de fichiers `.fit`.
+Backend NestJS de la plateforme **Sessionized** — application de coaching sportif permettant à un coach de planifier des séances et à un athlète d'analyser ses performances via l'upload de fichiers `.fit` ou l'import de ses activités Strava.
 
 ---
 
 ## Concept
 
-Sessionized met en relation des coachs et des athlètes autour de l'analyse de séances d'entraînement. L'athlète uploade son fichier `.fit` directement depuis sa montre (Garmin, Coros, Polar), le backend parse les données lap par lap et les compare au plan prescrit par le coach. Un **Warning Engine** génère automatiquement des alertes en cas d'écart significatif.
+Sessionized met en relation des coachs et des athlètes autour de l'analyse de séances d'entraînement. Le coach construit un plan (séances prescrites, jours de course) ; l'athlète importe ses activités, soit en uploadant le fichier `.fit` de sa montre (Garmin, Coros, Polar), soit depuis Strava. Le backend parse les données lap par lap et calcule :
+
+- l'intensité de chaque lap et le temps passé dans chaque zone de fréquence cardiaque ;
+- l'analyse de la réponse aérobie d'une séance (dérive allure / FC) ;
+- la charge d'entraînement dans le temps (CTL / ATL / TSB, modèle de Banister), calculée à la demande.
 
 ---
 
@@ -16,14 +20,12 @@ Sessionized met en relation des coachs et des athlètes autour de l'analyse de s
 |---|---|
 | Framework | NestJS (Node.js + TypeScript) |
 | Base de données | PostgreSQL |
-| Base clé-valeur | Redis (ioredis) — limitation des tentatives de connexion |
+| Base clé-valeur | Redis (ioredis) — limitation des tentatives de connexion, révocation des jetons |
 | ORM | Prisma |
 | Authentification | JWT maison (Passport.js + bcrypt) |
 | Upload fichiers | Multer |
 | Parser FIT | fit-file-parser |
-| Paiement | Stripe Connect |
-| Temps réel | WebSockets (NestJS Gateway) |
-| Tâches planifiées | NestJS Scheduler (cron) |
+| Intégration externe | API Strava (OAuth 2.0) |
 
 ---
 
@@ -32,17 +34,22 @@ Sessionized met en relation des coachs et des athlètes autour de l'analyse de s
 ```
 sessionized-api/
 ├── src/
-│   ├── auth/              # JWT, stratégies Passport, guards, décorateurs
-│   ├── users/             # Gestion des utilisateurs (ATHLETE / COACH)
-│   ├── activities/        # Upload FIT, parsing, persistance
-│   ├── plans/             # Séances planifiées et laps cibles
-│   ├── analysis/          # Calcul CTL / ATL / TSB (formule Banister)
-│   ├── warnings/          # Warning Engine — 4 familles de règles
-│   ├── notifications/     # WebSocket Gateway — push temps réel
-│   ├── stripe/            # Stripe Connect — abonnements et commission
-│   └── prisma/            # Schema, migrations, PrismaService
+│   ├── auth/              # Inscription, connexion, JWT, guards, politique de mots de passe
+│   ├── users/             # Comptes ATHLETE / COACH, profils, relation coach-athlète, données personnelles (RGPD)
+│   ├── activities/        # Upload .fit/.gpx, parsing, déduplication, analyse (zones FC, réponse aérobie)
+│   ├── plans/             # Plans d'entraînement
+│   ├── workouts/          # Séances prescrites et leurs laps cibles
+│   ├── race-days/         # Jours de course d'un plan
+│   ├── training-load/     # Charge d'entraînement CTL / ATL / TSB
+│   ├── strava/            # OAuth Strava, import et synchronisation des activités
+│   ├── health/            # GET /health (base et Redis)
+│   ├── redis/             # Client Redis partagé
+│   ├── prisma/            # PrismaService, garde-fou des migrations
+│   ├── config/            # Validation des variables d'environnement
+│   └── common/            # Intercepteur de logs, transformations
 ├── prisma/
-│   └── schema.prisma
+│   ├── schema.prisma
+│   └── migrations/
 ├── scripts/
 │   └── migrate.js         # bascule sur DATABASE_URL_UNPOOLED avant `prisma migrate`
 └── .env.example
@@ -54,34 +61,29 @@ sessionized-api/
 
 ```
 User (ATHLETE | COACH)
-  ├── AthleteProfile       → coaché par un CoachProfile
-  ├── CoachProfile         → gère N AthleteProfiles
-  ├── CorosToken           → token API Coros (si accès accordé)
-  └── Subscription         → abonnement Stripe actif
-
-Activity (source : FIT | COROS)
-  ├── Lap[]                → données lap par lap (allure, FC, cadence, puissance)
-  ├── Warning[]            → alertes générées automatiquement
-  └── PlannedSession?      → séance prescrite associée (optionnel)
-
-TrainingLoad
-  └── CTL / ATL / TSB      → calculé quotidiennement par cron
+  ├── AthleteProfile       → coaché par un CoachProfile, zones FC et d'allure
+  │     ├── StravaToken    → jetons OAuth Strava, chiffrés
+  │     ├── Activity[]     → séances réalisées (source : FIT | STRAVA | COROS)
+  │     │     ├── Lap[]         → données lap par lap (allure, FC, cadence, puissance, intensité)
+  │     │     ├── TrackPoint[]  → échantillons seconde par seconde (FC, allure, position)
+  │     │     └── RoutePoint[]  → trace GPS issue du .gpx
+  │     ├── Plan[]         → plans du coach
+  │     │     ├── Workout[]  → séances prescrites et leurs WorkoutLap[]
+  │     │     └── RaceDay[]  → jours de course
+  │     └── TrainingLoad[] → points CTL / ATL / TSB
+  └── CoachProfile         → gère N AthleteProfiles, notes reçues (CoachRating)
 ```
+
+`Warning`, `Subscription` et `CorosToken` existent dans le schéma pour les évolutions décrites plus bas, mais aucun code ne les alimente encore.
 
 ---
 
-## Warning Engine
+## Évolutions identifiées (hors périmètre actuel)
 
-C'est le cœur métier de l'application. Déclenché automatiquement après chaque upload de fichier `.fit`, il analyse l'activité selon 4 familles de règles :
-
-| Famille | Déclencheur | Exemple |
-|---|---|---|
-| **Intensité** | Lap trop rapide ou trop lent vs prescrit | Réalisé 1'33"/400m, prescrit 1'50" → critique |
-| **Charge** | TSB < -25 ou pic ATL > 130% CTL | Surcharge chronique → récupération recommandée |
-| **Pattern** | Même erreur sur 3 séances consécutives | Systématiquement trop rapide → revoir allures |
-| **Récupération** | Moins de 18h entre deux séances intensives | Risque de blessure → délai insuffisant |
-
-Chaque warning a une sévérité (`INFO`, `WARNING`, `CRITICAL`) et une suggestion concrète. Les warnings `CRITICAL` déclenchent une notification WebSocket en temps réel vers l'app coach.
+- **Moteur d'alertes** : comparer chaque activité à la séance prescrite et générer des alertes (intensité, charge, répétition d'une même erreur, récupération insuffisante) avec une sévérité `INFO`, `WARNING` ou `CRITICAL`. La table `Warning` et ses énumérations sont prêtes ; ni service ni route ne les utilisent.
+- **Paiement** : abonnement de l'athlète à son coach via Stripe Connect (modèle marketplace). Table `Subscription` prête, aucune intégration.
+- **Import Coros** : second fournisseur branché sur le même pipeline que le `.fit` si Coros ouvre son API.
+- **Chat** : retiré le 08/11/2026 (tables supprimées par la migration `20261108090000_drop_chat`). Il exposait le JWT de session au JavaScript du front pour ouvrir le WebSocket ; une réintroduction passerait par un jeton dédié, court et à usage unique.
 
 ---
 
@@ -100,8 +102,7 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 ### Sécurité HTTP
 
 - En-têtes de sécurité via `helmet` (CSP, HSTS, `nosniff`…)
-- CORS limité aux frontends listés dans `CORS_ORIGINS`, pour l'API REST comme pour le WebSocket du chat
-- Payloads WebSocket du chat validés avec les mêmes règles que les DTO REST ; l'événement `typing` n'est relayé qu'à l'autre participant de la conversation
+- CORS limité aux frontends listés dans `CORS_ORIGINS`
 - Tokens Strava chiffrés en base (AES-256-GCM, clé `STRAVA_TOKEN_ENCRYPTION_KEY`)
 - Variables d'environnement validées au démarrage (`src/config/env.validation.ts`) : l'API refuse de démarrer si la config est incomplète
 - Swagger (`/docs`) masqué par défaut en production
@@ -116,11 +117,7 @@ L'athlète uploade manuellement son fichier `.fit` depuis son interface. Le back
 1. Reçoit le fichier via `POST /activities/upload`
 2. Calcule un hash SHA-256 pour détecter les doublons
 3. Parse les laps avec `fit-file-parser`
-4. Persiste l'activité et ses laps en base
-5. Déclenche le Warning Engine
-6. Notifie en temps réel via WebSocket
-
-> Si l'API Coros est accordée, un second provider viendra brancher ses données sur le même pipeline sans modifier la logique métier.
+4. Persiste l'activité, ses laps et ses points de mesure en base
 
 ### Import Strava (alternative à l'upload manuel)
 
@@ -130,17 +127,6 @@ Plutôt que d'uploader `.fit` + `.gpx` à la main, un athlète peut connecter so
 2. L'athlète autorise l'accès sur strava.com, redirigé vers `GET /strava/callback` qui échange le `code` contre un token et le stocke chiffré (`StravaToken`, même pattern que `CorosToken`)
 3. `GET /strava/activities` → liste les activités Strava récentes (pour un sélecteur côté front), avec un flag `alreadyImported`
 4. `POST /strava/activities/:id/import` → récupère laps (`/activities/:id/laps`) + trace GPS et capteurs (`/activities/:id/streams`) auprès de l'API Strava, et alimente les mêmes tables `Activity`/`Lap`/`TrackPoint` que le pipeline `.fit` — aucun fichier `.gpx` séparé n'est nécessaire, Strava fournit position + FC/cadence/puissance dans un seul stream synchronisé.
-
----
-
-## Paiement
-
-Modèle marketplace via **Stripe Connect** :
-
-- Le coach crée un compte Stripe Express lors de son onboarding
-- L'athlète souscrit un abonnement mensuel au tarif fixé par le coach
-- Stripe répartit automatiquement : **95% coach / 5% plateforme**
-- Un webhook `invoice.paid` active l'accès de l'athlète côté backend
 
 ---
 
@@ -164,7 +150,7 @@ Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est
 | `STRAVA_TOKEN_ENCRYPTION_KEY` | Oui si Strava est utilisé | Clé AES-256 (32 octets en base64) qui chiffre les tokens Strava en base — `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Même clé pour tous ceux qui partagent une base** : sinon les tokens des autres ne se déchiffrent plus |
 | `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
 
-> Stripe et Coros sont mentionnés dans la stack technique cible du projet mais **pas encore implémentés** dans le code — aucune variable d'environnement associée n'est donc requise pour l'instant.
+> Stripe et Coros font partie des évolutions identifiées et ne sont **pas implémentés** : aucune variable d'environnement associée n'est requise.
 
 ### D'où vient `DATABASE_URL` ?
 
@@ -237,7 +223,7 @@ npm run test:e2e
 
 ## Déploiement
 
-L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railway, Fly… — pas d'hébergement serverless type Vercel. Garder **une seule instance** (socket.io sans adapter Redis ne se partage pas entre instances).
+L'API tourne comme un process Node persistant (Render, Railway, Fly…). Elle est sans état : les compteurs de tentatives de connexion et les jetons révoqués sont dans Redis, ce qui permet plusieurs instances derrière un répartiteur de charge.
 
 | Étape | Commande |
 |---|---|

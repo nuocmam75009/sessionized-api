@@ -9,7 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 
 // Version du format d'export : un outil qui relit le fichier sait ce qu'il lit
 // si la structure évolue.
-export const EXPORT_FORMAT = 'sessionized-export/1';
+// v2 : plus de conversations, le chat ayant été retiré.
+export const EXPORT_FORMAT = 'sessionized-export/2';
 
 function encodeFile(data: Uint8Array | null) {
   return data
@@ -118,21 +119,6 @@ export class PersonalDataService {
               },
               orderBy: { startedAt: 'asc' },
             },
-            conversations: {
-              select: {
-                coachId: true,
-                createdAt: true,
-                messages: {
-                  select: {
-                    senderId: true,
-                    content: true,
-                    createdAt: true,
-                    readAt: true,
-                  },
-                  orderBy: { createdAt: 'asc' },
-                },
-              },
-            },
           },
         },
       },
@@ -148,7 +134,6 @@ export class PersonalDataService {
         trainingLoads,
         plans,
         activities,
-        conversations,
         ...profile
       },
       ...account
@@ -174,14 +159,13 @@ export class PersonalDataService {
         }),
       ),
       trainingLoads,
-      conversations,
     };
   }
 
   /**
    * Efface le compte et tout ce qui s'y rattache : profil, activités, laps,
    * points GPS, fichiers bruts, plans, charge d'entraînement, jetons Strava,
-   * notes et messages suivent par cascade (onDelete: Cascade du schéma).
+   * et notes suivent par cascade (onDelete: Cascade du schéma).
    */
   async deleteAthleteAccount(userId: string, password: string): Promise<void> {
     const user = await this.prisma.user.findUnique({

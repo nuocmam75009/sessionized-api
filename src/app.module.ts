@@ -13,7 +13,6 @@ import { WorkoutsModule } from './workouts/workouts.module';
 import { PlansModule } from './plans/plans.module';
 import { RaceDaysModule } from './race-days/race-days.module';
 import { ActivitiesModule } from './activities/activities.module';
-import { ChatModule } from './chat/chat.module';
 import { StravaModule } from './strava/strava.module';
 import { TrainingLoadModule } from './training-load/training-load.module';
 import { HealthModule } from './health/health.module';
@@ -22,12 +21,10 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
-    // Limite par IP sur toute l'API HTTP (plus stricte sur /auth, cf.
-    // AuthController). Les événements WebSocket ne passent pas par ce guard.
+    // Limite par IP sur toute l'API (plus stricte sur /auth, cf. AuthController).
     ThrottlerModule.forRoot({
       throttlers: [{ ttl: 60_000, limit: 300 }],
       errorMessage: 'Trop de requêtes, réessayez dans un instant',
-      skipIf: (context) => context.getType() !== 'http',
     }),
     PrismaModule,
     RedisModule,
@@ -37,7 +34,6 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     PlansModule,
     RaceDaysModule,
     ActivitiesModule,
-    ChatModule,
     StravaModule,
     TrainingLoadModule,
     HealthModule,

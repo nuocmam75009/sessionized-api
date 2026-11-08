@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { CorsIoAdapter } from './common/adapters/cors-io.adapter';
 import { parseCorsOrigins } from './config/env.validation';
 
 /**
@@ -49,7 +48,6 @@ export function configureApp(app: NestExpressApplication): void {
 
   const corsOrigins = parseCorsOrigins(config.get<string>('CORS_ORIGINS'));
   app.enableCors({ origin: corsOrigins, credentials: true });
-  app.useWebSocketAdapter(new CorsIoAdapter(app, corsOrigins));
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
@@ -59,7 +57,7 @@ export function configureApp(app: NestExpressApplication): void {
       new DocumentBuilder()
         .setTitle('Sessionized API')
         .setDescription(
-          'Backend NestJS de la plateforme Sessionized — coaching sportif, analyse de séances .fit et Warning Engine.',
+          "Backend NestJS de la plateforme Sessionized — coaching sportif, import et analyse de séances (.fit, Strava), charge d'entraînement.",
         )
         .setVersion('0.0.1')
         .addBearerAuth()
