@@ -8,10 +8,23 @@ describe('isAccessTokenPayload', () => {
         sub: 'user-1',
         email: 'athlete@example.com',
         role: Role.ATHLETE,
+        jti: 'b9c1e0f2-jti',
         iat: 1,
         exp: 2,
       }),
     ).toBe(true);
+  });
+
+  it('refuse un jeton sans identifiant (jti), qui ne pourrait pas être révoqué', () => {
+    expect(
+      isAccessTokenPayload({
+        sub: 'user-1',
+        email: 'athlete@example.com',
+        role: Role.ATHLETE,
+        iat: 1,
+        exp: 2,
+      }),
+    ).toBe(false);
   });
 
   it('refuse le state OAuth Strava, signé avec le même secret', () => {

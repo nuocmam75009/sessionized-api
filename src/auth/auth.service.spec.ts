@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { LoginAttemptsService } from './login-attempts.service';
+import { TokenRevocationService } from './token-revocation.service';
 import { UsersService } from '../users/users.service';
 import { Role } from '../../generated/prisma/enums';
 
@@ -35,6 +36,7 @@ describe('AuthService.login', () => {
       usersService as unknown as UsersService,
       { sign: jest.fn().mockReturnValue('jwt') } as unknown as JwtService,
       loginAttempts as unknown as LoginAttemptsService,
+      {} as TokenRevocationService,
     );
   });
 
@@ -93,6 +95,7 @@ describe('AuthService.register', () => {
       usersService as unknown as UsersService,
       { sign: jest.fn().mockReturnValue('jwt') } as unknown as JwtService,
       {} as LoginAttemptsService,
+      {} as TokenRevocationService,
     );
   });
 
@@ -123,5 +126,62 @@ describe('AuthService.register', () => {
     expect(usersService.create).toHaveBeenCalledWith(
       expect.objectContaining({ healthDataConsentAt: undefined }),
     );
+  });
+});
+
+describe('AuthService — jetons et déconnexion', () => {
+  it('chaque jeton porte un identifiant unique (jti), condition de sa révocation', async () => {
+    const jwtService = { sign: jest.fn().mockReturnValue('jwt') };
+    const service = new AuthService(
+      {
+        findByEmail: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          email: 'a@example.com',
+          role: Role.COACH,
+        }),
+      } as unknown as UsersService,
+      jwtService as unknown as JwtService,
+      {} as LoginAttemptsService,
+      {} as TokenRevocationService,
+    );
+
+    await service.register({
+      email: 'a@example.com',
+      password: 'Correct-horse-battery-7',
+      role: Role.COACH,
+    });
+    await service.register({
+      email: 'a@example.com',
+      password: 'Correct-horse-battery-7',
+      role: Role.COACH,
+    });
+
+    const calls = jwtService.sign.mock.calls as Array<
+      [unknown, { jwtid: string }]
+    >;
+    const [first, second] = calls.map(([, options]) => options.jwtid);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second).not.toBe(first);
+  });
+
+  it('déconnexion : révoque le jeton présenté jusqu’à son expiration', async () => {
+    const revocation = { revoke: jest.fn().mockResolvedValue(undefined) };
+    const service = new AuthService(
+      {} as UsersService,
+      {} as JwtService,
+      {} as LoginAttemptsService,
+      revocation as unknown as TokenRevocationService,
+    );
+
+    await service.logout({
+      sub: 'user-1',
+      email: 'a@example.com',
+      role: Role.ATHLETE,
+      jti: 'jti-1',
+      exp: 1_900_000_000,
+    });
+
+    expect(revocation.revoke).toHaveBeenCalledWith('jti-1', 1_900_000_000);
   });
 });

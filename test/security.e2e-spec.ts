@@ -206,11 +206,20 @@ describe('Sécurité de l’API (e2e)', () => {
 
   describe('A07 — Authentification et jetons JWT', () => {
     const jwt = new JwtService();
+    // Revendications d'un vrai jeton d'accès, jti compris : seul le défaut
+    // que chaque test introduit (expiration, signature…) motive le refus.
     const payloadOf = (account: Account) => ({
       sub: account.userId,
       email: account.email,
       role: Role.ATHLETE,
+      jti: randomUUID(),
     });
+    // Une seconde session du même compte, comme après une autre connexion.
+    const newSession = (account: Account) =>
+      jwt.sign(payloadOf(account), {
+        secret: E2E_JWT_SECRET,
+        expiresIn: '1h',
+      });
 
     it('témoin : le jeton d’inscription donne accès au profil', async () => {
       await request(server)
@@ -281,6 +290,56 @@ describe('Sécurité de l’API (e2e)', () => {
       await request(server)
         .get('/users/me')
         .set('Authorization', bearer(state))
+        .expect(401);
+    });
+
+    it('déconnexion : le jeton révoqué est refusé partout, les autres sessions restent ouvertes', async () => {
+      const session = newSession(athleteA);
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(session))
+        .expect(200);
+
+      await request(server)
+        .post('/auth/logout')
+        .set('Authorization', bearer(session))
+        .expect(204);
+
+      for (const path of ['/users/me', `/activities/${activityId}`]) {
+        const res = await request(server)
+          .get(path)
+          .set('Authorization', bearer(session))
+          .expect(401);
+        expect(res.body).toMatchObject({
+          message: 'Session terminée, reconnectez-vous',
+        });
+      }
+      // Ni une seconde déconnexion avec le même jeton.
+      await request(server)
+        .post('/auth/logout')
+        .set('Authorization', bearer(session))
+        .expect(401);
+
+      // Témoin : le jeton d'inscription du même compte reste valide.
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(athleteA))
+        .expect(200);
+    });
+
+    it('déconnexion sans jeton : 401', async () => {
+      await request(server).post('/auth/logout').expect(401);
+    });
+
+    it('jeton sans identifiant (jti), donc irrévocable : 401', async () => {
+      const { jti: _jti, ...withoutJti } = payloadOf(athleteA);
+      const token = jwt.sign(withoutJti, {
+        secret: E2E_JWT_SECRET,
+        expiresIn: '1h',
+      });
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(token))
         .expect(401);
     });
 

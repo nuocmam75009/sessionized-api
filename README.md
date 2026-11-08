@@ -93,7 +93,8 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 
 - L'utilisateur s'inscrit avec email + mot de passe
 - Politique de mots de passe de la CNIL (délibération n° 2022-100, cas « mot de passe et restriction d'accès », puisque les connexions sont limitées) : au moins 8 caractères mêlant 3 types parmi majuscules, minuscules, chiffres et caractères spéciaux, ou une phrase d'au moins 5 mots, ou au moins 16 chiffres. Refusés aussi : mots de passe courants ou prévisibles, et ceux qui contiennent le nom, l'e-mail ou le nom du service. Le message d'erreur donne la raison du refus ([src/auth/password-policy.ts](src/auth/password-policy.ts)). La règle s'applique à l'inscription, pas à la connexion des comptes existants
-- Le token JWT contient `{ sub, role, email }`
+- Le token JWT contient `{ sub, role, email }` et un identifiant unique `jti`
+- `POST /auth/logout` révoque le jeton présenté : son `jti` est inscrit dans Redis (`revoked-jwt:<jti>`) jusqu'à l'expiration du jeton, et toute route le refuse ensuite (401). Les autres sessions du compte restent ouvertes. Si Redis est en panne, la vérification laisse passer (même choix que la limitation des tentatives) et la déconnexion répond 503
 - Le rôle (`ATHLETE` ou `COACH`) est vérifié par un `RolesGuard` sur chaque endpoint
 - Un athlète ne peut jamais accéder aux routes coach et vice versa
 - Emails normalisés en minuscules (inscription, connexion, recherche)
