@@ -8,7 +8,9 @@ export class LoginDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ example: 'password123' })
+  // Pas de politique ici : les comptes créés avant elle doivent pouvoir se
+  // connecter. Elle s'applique à la création du mot de passe.
+  @ApiProperty({ example: 'Course-matinale-2026' })
   @IsString()
   password: string;
 }

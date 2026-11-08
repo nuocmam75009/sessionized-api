@@ -1,7 +1,9 @@
 # Services d'appui pour le développement local.
-# La base PostgreSQL n'est pas ici : Neon partagé ou `npx prisma dev` (voir README).
+# La base PostgreSQL de développement n'est pas ici : Neon partagé ou
+# `npx prisma dev` (voir README).
 #
-#   docker compose up -d redis
+#   docker compose up -d redis                  # développement
+#   docker compose up -d redis postgres-test    # tests e2e (npm run test:e2e)
 services:
   redis:
     image: redis:8-alpine
@@ -15,3 +17,22 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  # Base jetable des tests e2e, qui créent comptes et activités : jamais la
+  # base Neon partagée. Données en mémoire (tmpfs), effacées à l'arrêt du
+  # conteneur. Port 5433 pour ne pas gêner un PostgreSQL local sur 5432.
+  postgres-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sessionized
+      POSTGRES_PASSWORD: sessionized
+      POSTGRES_DB: sessionized_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sessionized -d sessionized_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

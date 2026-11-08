@@ -90,6 +90,7 @@ Chaque warning a une sévérité (`INFO`, `WARNING`, `CRITICAL`) et une suggesti
 JWT maison — pas d'IDP externe (pas d'Auth0).
 
 - L'utilisateur s'inscrit avec email + mot de passe
+- Politique de mots de passe de la CNIL (délibération n° 2022-100, cas « mot de passe et restriction d'accès », puisque les connexions sont limitées) : au moins 8 caractères mêlant 3 types parmi majuscules, minuscules, chiffres et caractères spéciaux, ou une phrase d'au moins 5 mots, ou au moins 16 chiffres. Refusés aussi : mots de passe courants ou prévisibles, et ceux qui contiennent le nom, l'e-mail ou le nom du service. Le message d'erreur donne la raison du refus ([src/auth/password-policy.ts](src/auth/password-policy.ts)). La règle s'applique à l'inscription, pas à la connexion des comptes existants
 - Le token JWT contient `{ sub, role, email }`
 - Le rôle (`ATHLETE` ou `COACH`) est vérifié par un `RolesGuard` sur chaque endpoint
 - Un athlète ne peut jamais accéder aux routes coach et vice versa
@@ -103,6 +104,8 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 - Payloads WebSocket du chat validés avec les mêmes règles que les DTO REST ; l'événement `typing` n'est relayé qu'à l'autre participant de la conversation
 - Tokens Strava chiffrés en base (AES-256-GCM, clé `STRAVA_TOKEN_ENCRYPTION_KEY`)
 - Variables d'environnement validées au démarrage (`src/config/env.validation.ts`) : l'API refuse de démarrer si la config est incomplète
+- Swagger (`/docs`) masqué par défaut en production
+- Quota de l'API Strava (partagé par tous les athlètes) : un 429 de Strava renvoie un 503 `STRAVA_RATE_LIMITED` avec `retryAfterSec`, et suspend les appels jusqu'à la réinitialisation de la fenêtre (quart d'heure suivant, ou minuit UTC si le quota du jour est épuisé)
 
 ---
 
@@ -210,6 +213,28 @@ L'API est disponible sur `http://localhost:3001`, la doc Swagger sur `http://loc
 
 ---
 
+## Tests
+
+```bash
+# Tests unitaires (aucun service requis)
+npm test
+npm run test:cov        # avec rapport de couverture dans coverage/
+
+# Tests e2e et de sécurité : vraie application, vrai PostgreSQL, vrai Redis
+docker compose up -d redis postgres-test
+npm run test:e2e
+```
+
+- Les tests e2e tournent sur le conteneur `postgres-test` (port 5433, données en mémoire), **jamais sur la base Neon du `.env`** : `test/e2e-env.ts` refuse toute base non locale. Les migrations y sont appliquées automatiquement avant les tests. `E2E_DATABASE_URL` et `E2E_REDIS_URL` permettent de viser d'autres services locaux.
+- [test/security.e2e-spec.ts](test/security.e2e-spec.ts) couvre le contrôle d'accès (IDOR, rôles, élévation de privilège), les jetons JWT (expiré, modifié, mal signé, `alg: none`, `state` OAuth réutilisé), la force brute sur la connexion, la validation des entrées et des uploads, les en-têtes de sécurité et le CORS.
+- `test:e2e` lance Jest avec `--experimental-vm-modules` : le client Prisma 7 charge son moteur de requêtes (WASM) par un `import()` dynamique, que Jest refuse sans ce drapeau.
+
+### Intégration continue
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) s'exécute sur chaque PR et chaque push sur `master` : `npm ci`, lint (`npm run lint:check`, sans correction automatique), build, tests unitaires avec couverture, tests e2e sur des services PostgreSQL et Redis jetables, contrôle que les migrations produisent exactement `schema.prisma` (`prisma migrate diff --exit-code`), audit des dépendances de production (`npm audit --omit=dev --audit-level=high`), puis construction de l'image Docker. Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) propose chaque semaine les mises à jour npm, GitHub Actions et de l'image Node.
+
+---
+
 ## Déploiement
 
 L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railway, Fly… — pas d'hébergement serverless type Vercel. Garder **une seule instance** (socket.io sans adapter Redis ne se partage pas entre instances).
@@ -217,9 +242,9 @@ L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railwa
 | Étape | Commande |
 |---|---|
 | Build | `npm ci --include=dev && npm run build` |
-| Migrations (avant chaque démarrage) | `npm run migrate:deploy` |
+| Migrations (étape distincte, une fois par déploiement, avant de démarrer la nouvelle version) | `npm run migrate:deploy` |
 | Démarrage | `npm run start:prod` |
-| Health check | `GET /` |
+| Health check | `GET /health` : 200 si la base répond (`status` `ok`, ou `degraded` si Redis est en panne), 503 sinon |
 
 - `--include=dev` est nécessaire : avec `NODE_ENV=production`, npm n'installe pas les devDependencies, dont `@nestjs/cli` qui sert au build.
 - Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée) et `DATABASE_URL_UNPOOLED` (directe, pour les migrations).
@@ -235,9 +260,33 @@ docker build -t sessionized-api .
 docker run -p 3000:3000 --env-file .env sessionized-api
 ```
 
-Au démarrage, le conteneur applique automatiquement les migrations Prisma (`migrate:deploy`) avant de lancer le serveur. L'image définit `NODE_ENV=production` : il faut donc les mêmes variables que ci-dessus.
+Le conteneur ne lance que l'API : il n'applique **pas** les migrations (voir ci-dessous). L'image définit `NODE_ENV=production` : il faut donc les mêmes variables que ci-dessus.
+
+Le process tourne sous l'utilisateur non privilégié `node` (uid 1000), et un `HEALTHCHECK` interroge `GET /health` toutes les 30 secondes : `docker ps` affiche `healthy`, ou `unhealthy` après trois échecs.
 
 > Dans un conteneur, `localhost` désigne le conteneur lui-même : pour joindre le Redis de `docker compose` depuis `docker run`, utilise `REDIS_URL=redis://host.docker.internal:6379`.
+
+### Migrations : une étape de déploiement distincte
+
+Les migrations s'appliquent **une fois par déploiement**, avec la même image, **avant** de démarrer la nouvelle version :
+
+```bash
+docker run --rm --env-file .env.production sessionized-api node scripts/migrate.js deploy
+```
+
+Chez l'hébergeur, c'est la commande de pré-déploiement (Render : *Pre-Deploy Command* ; Fly.io : `release_command` ; Railway : *Pre-Deploy Command*) : `node scripts/migrate.js deploy`. Elle a besoin de `DATABASE_URL_UNPOOLED` (connexion directe Neon).
+
+- **Pourquoi pas au démarrage** : une migration lancée par chaque conteneur qui (re)démarre couple deux opérations de nature différente. Une migration en échec fait alors redémarrer l'API en boucle, et le code applicatif doit avoir les droits de modifier le schéma. Prisma Migrate pose bien un verrou PostgreSQL (`pg_advisory_lock`) contre deux migrations simultanées, mais ne règle pas ce couplage.
+- **Garde-fou** : au démarrage, l'API compare les migrations livrées dans l'image à celles de la table `_prisma_migrations`. S'il en manque une, elle refuse de démarrer en la nommant ([src/prisma/pending-migrations.ts](src/prisma/pending-migrations.ts)) : un oubli de l'étape fait échouer le déploiement de façon visible, au lieu d'exécuter le nouveau code sur l'ancien schéma.
+- **Avant la production** : chaque PR applique toutes les migrations sur une base vierge (tests e2e) et vérifie que le schéma obtenu est exactement `schema.prisma` (`prisma migrate diff --exit-code`, voir « Intégration continue »). Pour une migration délicate, l'appliquer d'abord sur une branche Neon copiée de la production.
+
+### Retour arrière
+
+Prisma Migrate n'a pas de migration descendante : le retour arrière repose sur des **migrations rétrocompatibles** (*expand/contract*).
+
+1. Une version ne fait qu'**ajouter** : table, colonne facultative ou avec valeur par défaut. Supprimer ou renommer se fait dans une version ultérieure, quand plus aucun code déployé n'utilise l'ancien élément.
+2. L'image précédente fonctionne donc sur le nouveau schéma : revenir en arrière, c'est **redéployer l'image N−1** sans toucher à la base. Le garde-fou le permet : il tolère en base des migrations plus récentes que le code.
+3. Migration destructive ou erronée : restaurer la base Neon à l'instant précédant le déploiement (restauration à un instant donné), ou livrer une migration corrective. Une migration en échec se marque avec `npx prisma migrate resolve --rolled-back <nom>` une fois la base remise en état.
 
 ---
 

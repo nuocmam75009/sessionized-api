@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
-import { StravaTokenCipher } from './strava-token-cipher';
+import {
+  StravaTokenCipher,
+  StravaTokenDecryptionError,
+} from './strava-token-cipher';
 
 const newKey = () => randomBytes(32).toString('base64');
 const cipherWithKey = (key: string) =>
@@ -31,8 +34,20 @@ describe('StravaTokenCipher', () => {
   it('refuse un token chiffré avec une autre clé', () => {
     const encrypted = cipherWithKey(newKey()).encrypt('token');
 
-    expect(() => cipher.decrypt(encrypted)).toThrow(
+    expect(() => cipher.decrypt(encrypted)).toThrow(StravaTokenDecryptionError);
+  });
+
+  // Avant correction, l'absence de clé était rapportée comme « clé changée
+  // ou token corrompu » : l'erreur de configuration restait invisible.
+  it('clé absente : erreur de configuration, pas un token corrompu', () => {
+    const encrypted = cipher.encrypt('token');
+    const withoutKey = new StravaTokenCipher(new ConfigService({}));
+
+    expect(() => withoutKey.decrypt(encrypted)).toThrow(
       /STRAVA_TOKEN_ENCRYPTION_KEY/,
+    );
+    expect(() => withoutKey.decrypt(encrypted)).not.toThrow(
+      StravaTokenDecryptionError,
     );
   });
 

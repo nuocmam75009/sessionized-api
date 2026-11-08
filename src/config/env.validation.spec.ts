@@ -52,6 +52,21 @@ describe('validateEnv', () => {
     );
   });
 
+  it('exige la clé de chiffrement en dev si STRAVA_CLIENT_ID est défini', () => {
+    expect(() =>
+      validateEnv({ ...DEV_ENV, STRAVA_CLIENT_ID: '12345' }),
+    ).toThrow(
+      /STRAVA_TOKEN_ENCRYPTION_KEY est obligatoire quand STRAVA_CLIENT_ID est défini/,
+    );
+    expect(() =>
+      validateEnv({
+        ...DEV_ENV,
+        STRAVA_CLIENT_ID: '12345',
+        STRAVA_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      }),
+    ).not.toThrow();
+  });
+
   it('refuse une clé de chiffrement qui ne fait pas 32 octets', () => {
     expect(() =>
       validateEnv({
