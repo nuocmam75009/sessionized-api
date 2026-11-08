@@ -252,10 +252,19 @@ function weekTemplates(week: number, isRaceWeek: boolean): WorkoutTemplate[] {
       targetHeartRateZone: HeartRateZone.Z4,
       laps: [
         { targetDistanceM: 2000, targetHeartRateZone: HeartRateZone.Z2 },
-        ...Array.from({ length: block.reps }, () => ({
-          targetDistanceM: block.distanceM,
-          targetPaceSecPerKm: block.pace,
-        })),
+        // Répétitions et récupérations, comme les laps de la montre : le
+        // prévu et le réalisé se comparent lap à lap.
+        ...Array.from({ length: block.reps * 2 - 1 }, (_, i) =>
+          i % 2 === 0
+            ? {
+                targetDistanceM: block.distanceM,
+                targetPaceSecPerKm: block.pace,
+              }
+            : {
+                targetDistanceM: block.recoveryM,
+                targetHeartRateZone: HeartRateZone.Z1,
+              },
+        ),
         { targetDistanceM: 1500, targetHeartRateZone: HeartRateZone.Z1 },
       ],
       segments: () =>
