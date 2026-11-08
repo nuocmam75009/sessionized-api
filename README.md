@@ -175,6 +175,41 @@ Dans ce cas, laisse `DATABASE_URL_UNPOOLED` vide — inutile en local.
 
 ---
 
+### Rôles PostgreSQL : propriétaire et application
+
+Deux rôles, selon le principe du moindre privilège :
+
+| Rôle | Connexion | Droits |
+|---|---|---|
+| Propriétaire (rôle Neon par défaut) | `DATABASE_URL_UNPOOLED`, migrations uniquement | Tous, schéma compris |
+| `sessionized_app` | `DATABASE_URL`, l'API | `SELECT`, `INSERT`, `UPDATE`, `DELETE` sur les tables ; lecture seule de `_prisma_migrations` ; ni `CREATE`, ni `ALTER`, ni `DROP`, ni `TRUNCATE` |
+
+Une injection SQL qui passerait malgré Prisma ne pourrait donc ni supprimer ni créer de table. Création ou mise à jour du rôle, avec la connexion du propriétaire (idempotent) :
+
+```bash
+APP_DB_PASSWORD='<mot de passe fort>' npm run db:grant-app-role
+```
+
+Les tests e2e tournent sous ce rôle, et vérifient qu'il ne peut pas modifier le schéma ([test/security.e2e-spec.ts](test/security.e2e-spec.ts), bloc « A05 — Moindre privilège en base »).
+
+### Jeu de données de démonstration
+
+```bash
+npm run db:seed
+```
+
+Crée un coach, deux athlètes qu'il suit, un plan de dix semaines (préparation d'un 10 km) et six semaines de séances réalisées, avec laps et points de mesure toutes les 5 s ([prisma/seed.ts](prisma/seed.ts)). Les dates suivent le jour d'exécution. Idempotent : seuls les comptes `@demo.test` sont supprimés puis recréés. Refusé si `NODE_ENV=production`. Aucune donnée réelle (noms inventés, trace GPS synthétique).
+
+| Compte | Rôle |
+|---|---|
+| `claire.martin@demo.test` | Coach |
+| `camille.durand@demo.test` | Athlète, plan et une vingtaine de séances |
+| `hugo.lefevre@demo.test` | Athlète, 3 séances |
+
+Mot de passe commun : `Tempo-Fartlek-2026`.
+
+---
+
 ## Lancer en développement
 
 ```bash
@@ -234,7 +269,7 @@ L'API tourne comme un process Node persistant (Render, Railway, Fly…). Elle es
 | Health check | `GET /health` : 200 si la base répond (`status` `ok`, ou `degraded` si Redis est en panne), 503 sinon |
 
 - `--include=dev` est nécessaire : avec `NODE_ENV=production`, npm n'installe pas les devDependencies, dont `@nestjs/cli` qui sert au build.
-- Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée) et `DATABASE_URL_UNPOOLED` (directe, pour les migrations).
+- Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée, rôle `sessionized_app`) et `DATABASE_URL_UNPOOLED` (directe, rôle propriétaire, pour les migrations). Voir « Rôles PostgreSQL ».
 - Variables minimales : `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `JWT_SECRET` (nouveau, ≥ 32 caractères), `CORS_ORIGINS`, `REDIS_URL`. Avec Strava : `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, `STRAVA_REDIRECT_URI=https://<api>/strava/callback`, `STRAVA_TOKEN_ENCRYPTION_KEY`, `ATHLETE_APP_URL` — et mettre à jour l'« Authorization Callback Domain » de l'app Strava.
 - Redis sur Render : créer un **Key Value** dans la même région que l'API, sans IP autorisée en externe, et copier son URL **interne** dans `REDIS_URL`.
 
@@ -266,6 +301,20 @@ Chez l'hébergeur, c'est la commande de pré-déploiement (Render : *Pre-Deploy 
 - **Pourquoi pas au démarrage** : une migration lancée par chaque conteneur qui (re)démarre couple deux opérations de nature différente. Une migration en échec fait alors redémarrer l'API en boucle, et le code applicatif doit avoir les droits de modifier le schéma. Prisma Migrate pose bien un verrou PostgreSQL (`pg_advisory_lock`) contre deux migrations simultanées, mais ne règle pas ce couplage.
 - **Garde-fou** : au démarrage, l'API compare les migrations livrées dans l'image à celles de la table `_prisma_migrations`. S'il en manque une, elle refuse de démarrer en la nommant ([src/prisma/pending-migrations.ts](src/prisma/pending-migrations.ts)) : un oubli de l'étape fait échouer le déploiement de façon visible, au lieu d'exécuter le nouveau code sur l'ancien schéma.
 - **Avant la production** : chaque PR applique toutes les migrations sur une base vierge (tests e2e) et vérifie que le schéma obtenu est exactement `schema.prisma` (`prisma migrate diff --exit-code`, voir « Intégration continue »). Pour une migration délicate, l'appliquer d'abord sur une branche Neon copiée de la production.
+
+### Sauvegarde et restauration
+
+- **Production (Neon)** : restauration de la base à un instant donné (*point-in-time restore*), dans la fenêtre d'historique de l'offre Neon. C'est la parade à une migration destructive ou à une suppression accidentelle.
+- **Sauvegarde logique**, indépendante de l'hébergeur, avant une migration délicate ou pour archiver :
+
+  ```bash
+  pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL_UNPOOLED" > sessionized-$(date +%F).dump
+  pg_restore --no-owner --no-privileges --exit-on-error --dbname="<base vierge>" sessionized-AAAA-MM-JJ.dump
+  APP_DB_PASSWORD='…' npm run db:grant-app-role   # droits du rôle applicatif sur la base restaurée
+  ```
+
+  `pg_dump` doit être d'une version au moins égale à celle du serveur (PostgreSQL 17). Le fichier contient des données de santé : il se chiffre et se stocke hors du dépôt.
+- **Procédure testée** : [scripts/backup-restore-check.sh](scripts/backup-restore-check.sh) sauvegarde la base de test, la restaure dans une base vierge et compare table par table le nombre de lignes et une empreinte MD5 du contenu. Il échoue au moindre écart (vérifié en supprimant une ligne de la copie).
 
 ### Retour arrière
 

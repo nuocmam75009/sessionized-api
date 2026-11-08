@@ -8,7 +8,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ActivitySource, Role } from '../generated/prisma/enums';
-import { E2E_JWT_SECRET } from './e2e-env';
+import { E2E_APP_ROLE, E2E_JWT_SECRET } from './e2e-env';
 import { buildSyntheticFit } from './fixtures/fit-builder';
 
 // Tests de sécurité de l'API, de bout en bout : vraie application (mêmes
@@ -478,6 +478,38 @@ describe('Sécurité de l’API (e2e)', () => {
     });
   });
 
+  // L'API se connecte avec un rôle sans droit sur le schéma
+  // (scripts/grant-app-role.js) : même une injection SQL qui passerait
+  // malgré Prisma ne pourrait ni supprimer ni créer de table.
+  describe('A05 — Moindre privilège en base', () => {
+    const rejected = (sql: string) =>
+      expect(prisma.$executeRawUnsafe(sql)).rejects.toThrow(
+        /permission denied|must be owner/i,
+      );
+
+    it('témoin : l’API est connectée avec le rôle applicatif, qui lit et écrit', async () => {
+      const [{ current_user }] = await prisma.$queryRaw<
+        Array<{ current_user: string }>
+      >`SELECT current_user`;
+      expect(current_user).toBe(E2E_APP_ROLE);
+      await expect(prisma.user.count()).resolves.toBeGreaterThan(0);
+    });
+
+    it('aucune modification du schéma : DROP, CREATE, ALTER refusés', async () => {
+      await rejected('DROP TABLE "TrackPoint"');
+      await rejected('CREATE TABLE intrusion (id int)');
+      await rejected('ALTER TABLE "User" ADD COLUMN is_admin boolean');
+      await rejected('TRUNCATE "Activity"');
+    });
+
+    it('historique des migrations en lecture seule', async () => {
+      await expect(
+        prisma.$queryRawUnsafe('SELECT count(*) FROM "_prisma_migrations"'),
+      ).resolves.toBeDefined();
+      await rejected('DELETE FROM "_prisma_migrations"');
+    });
+  });
+
   // Jeu d'essai de l'upload (rncp/09-plans-de-tests.md). Le cas 4 (plus de
   // 20 Mo) est couvert plus haut. Les .fit valides sont synthétiques
   // (test/fixtures/fit-builder.ts) : aucune trace GPS réelle dans le dépôt.
@@ -567,7 +599,10 @@ describe('Sécurité de l’API (e2e)', () => {
       const { id } = created?.body as { id: string };
       // Une seule activité, complète : pas de demi-import du perdant.
       const activities = await prisma.activity.findMany({
-        where: { startedAt: new Date('2026-10-22T07:00:00Z') },
+        where: {
+          athlete: { userId: athleteA.userId },
+          startedAt: new Date('2026-10-22T07:00:00Z'),
+        },
         include: { _count: { select: { laps: true, trackPoints: true } } },
       });
       expect(activities).toHaveLength(1);

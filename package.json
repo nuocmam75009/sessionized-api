@@ -17,6 +17,8 @@
     "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "migrate:dev": "node scripts/migrate.js dev",
     "migrate:deploy": "node scripts/migrate.js deploy",
+    "db:seed": "nest build && node dist/prisma/seed.js",
+    "db:grant-app-role": "node scripts/grant-app-role.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",

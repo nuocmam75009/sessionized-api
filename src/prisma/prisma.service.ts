@@ -18,7 +18,7 @@ import {
 // The proxy's api_key is a base64 JSON payload carrying the real connection
 // string, so we unwrap it here for the adapter. Regular `postgresql://` URLs
 // (staging/prod) pass through unchanged.
-function resolveConnectionString(url: string): string {
+export function resolveConnectionString(url: string): string {
   if (!url.startsWith('prisma+postgres://')) {
     return url;
   }
