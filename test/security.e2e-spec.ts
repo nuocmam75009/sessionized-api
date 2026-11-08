@@ -9,6 +9,7 @@ import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ActivitySource, Role } from '../generated/prisma/enums';
 import { E2E_JWT_SECRET } from './e2e-env';
+import { buildSyntheticFit } from './fixtures/fit-builder';
 
 // Tests de sécurité de l'API, de bout en bout : vraie application (mêmes
 // guards, pipes, en-têtes que main.ts), vraie base PostgreSQL et vrai Redis.
@@ -418,11 +419,104 @@ describe('Sécurité de l’API (e2e)', () => {
     });
   });
 
-  // Cas du jeu d'essai de l'upload (rncp/09-plans-de-tests.md) qui ne
-  // demandent pas de vrai fichier .fit ; le cas 4 (plus de 20 Mo) est couvert
-  // plus haut.
+  // Jeu d'essai de l'upload (rncp/09-plans-de-tests.md). Le cas 4 (plus de
+  // 20 Mo) est couvert plus haut. Les .fit valides sont synthétiques
+  // (test/fixtures/fit-builder.ts) : aucune trace GPS réelle dans le dépôt.
   describe('Jeu d’essai — upload d’un fichier .fit', () => {
     const upload = () => request(server).post('/activities/upload');
+
+    it('cas 1 : .fit valide → 201, activité, laps et points créés', async () => {
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .attach('file', buildSyntheticFit({ laps: 4 }), 'piste.fit')
+        .expect(201);
+      const body = res.body as {
+        id: string;
+        laps: unknown[];
+        trackPointsCount: number;
+        totalDistanceM: number;
+      };
+      expect(body.laps).toHaveLength(4);
+      expect(body.trackPointsCount).toBe(40);
+      expect(body.totalDistanceM).toBe(1600);
+
+      // Points réellement en base, dans la même écriture que l'activité.
+      await expect(
+        prisma.trackPoint.count({ where: { activityId: body.id } }),
+      ).resolves.toBe(40);
+    });
+
+    it('cas 2 : même fichier renvoyé → 409', async () => {
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .attach('file', buildSyntheticFit({ laps: 4 }), 'piste.fit')
+        .expect(409);
+      expect(res.body).toMatchObject({
+        message: 'Cette activité a déjà été importée',
+      });
+    });
+
+    it('cas 9 : séance d’un autre athlète → 403', async () => {
+      const otherCoachProfile = await prisma.coachProfile.findUniqueOrThrow({
+        where: { userId: otherCoach.userId },
+      });
+      const athleteBProfile = await prisma.athleteProfile.findUniqueOrThrow({
+        where: { userId: athleteB.userId },
+      });
+      const workout = await prisma.workout.create({
+        data: {
+          title: 'Séance de B',
+          scheduledDate: new Date('2026-10-20T00:00:00Z'),
+          plan: {
+            create: {
+              coachId: otherCoachProfile.id,
+              athleteId: athleteBProfile.id,
+              startDate: new Date('2026-10-01T00:00:00Z'),
+            },
+          },
+        },
+      });
+
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .field('workoutId', workout.id)
+        .attach(
+          'file',
+          buildSyntheticFit({ startedAt: new Date('2026-10-20T07:00:00Z') }),
+          'seance.fit',
+        )
+        .expect(403);
+      expect(res.body).toMatchObject({
+        message: 'Ce workout ne vous appartient pas',
+      });
+    });
+
+    it('cas 11 : deux envois simultanés → un 201 et un 409, jamais de 500', async () => {
+      const fit = buildSyntheticFit({
+        startedAt: new Date('2026-10-22T07:00:00Z'),
+        laps: 6,
+      });
+      const send = () =>
+        upload()
+          .set('Authorization', bearer(athleteA))
+          .attach('file', fit, 'simultane.fit');
+
+      const responses = await Promise.all([send(), send()]);
+      expect(responses.map((res) => res.status).sort()).toEqual([201, 409]);
+
+      const created = responses.find((res) => res.status === 201);
+      const { id } = created?.body as { id: string };
+      // Une seule activité, complète : pas de demi-import du perdant.
+      const activities = await prisma.activity.findMany({
+        where: { startedAt: new Date('2026-10-22T07:00:00Z') },
+        include: { _count: { select: { laps: true, trackPoints: true } } },
+      });
+      expect(activities).toHaveLength(1);
+      expect(activities[0]).toMatchObject({
+        id,
+        _count: { laps: 6, trackPoints: 60 },
+      });
+    });
 
     it('cas 3 : un .gpx sur /activities/upload est refusé (400)', async () => {
       const res = await upload()

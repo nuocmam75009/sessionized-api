@@ -11,6 +11,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../prisma/prisma-errors';
+import type { Prisma } from '../../generated/prisma/client';
 import { UsersService } from '../users/users.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { ActivityLabel, ActivitySource } from '../../generated/prisma/enums';
@@ -382,65 +384,73 @@ export class StravaService {
       })),
     );
 
-    const activity = await this.prisma.activity.create({
-      data: {
-        athleteId,
-        source: ActivitySource.STRAVA,
-        fileHash,
-        stravaActivityId,
-        sport: detail.sport_type,
-        labels: mapStravaLabels(detail),
-        startedAt,
-        totalDistanceM: detail.distance,
-        totalDurationSec: Math.round(detail.elapsed_time),
-        avgHeartRate: roundOrUndefined(detail.average_heartrate),
-        maxHeartRate: roundOrUndefined(detail.max_heartrate),
-        avgCadence: roundOrUndefined(detail.average_cadence),
-        avgPower: roundOrUndefined(detail.average_watts),
-        totalCalories: roundOrUndefined(detail.calories),
-        elevationGainM: detail.total_elevation_gain,
-        athleteNote: options.athleteNote,
-        difficultyNote: options.difficultyNote,
-        workoutId: options.workoutId ?? undefined,
-        laps: {
-          create: laps.map((lap, position) => ({
-            index: lap.lap_index,
-            ...lapIntensities[position],
-            distanceM: lap.distance,
-            durationSec: lap.moving_time,
-            avgPaceSecPerKm: lap.average_speed
-              ? 1000 / lap.average_speed
-              : undefined,
-            avgHeartRate: roundOrUndefined(lap.average_heartrate),
-            maxHeartRate: roundOrUndefined(lap.max_heartrate),
-            avgCadence: roundOrUndefined(lap.average_cadence),
-            avgPower: roundOrUndefined(lap.average_watts),
-          })),
-        },
-      },
-      include: { laps: true },
-    });
-
     const sampleCount = streams.time?.data.length ?? 0;
-    if (sampleCount > 0) {
-      const startedAtMs = startedAt.getTime();
-      await this.prisma.trackPoint.createMany({
-        data: Array.from({ length: sampleCount }, (_, i) => ({
-          activityId: activity.id,
-          timestamp: new Date(
-            startedAtMs + (streams.time?.data[i] ?? 0) * 1000,
-          ),
-          elapsedSec: streams.time?.data[i] ?? 0,
-          distanceM: streams.distance?.data[i],
-          latitude: streams.latlng?.data[i]?.[0],
-          longitude: streams.latlng?.data[i]?.[1],
-          altitudeM: streams.altitude?.data[i],
-          heartRate: roundOrUndefined(streams.heartrate?.data[i]),
-          cadence: roundOrUndefined(streams.cadence?.data[i]),
-          power: roundOrUndefined(streams.watts?.data[i]),
-          speedMPerSec: streams.velocity_smooth?.data[i],
-        })),
+    const startedAtMs = startedAt.getTime();
+    const trackPoints = Array.from({ length: sampleCount }, (_, i) => ({
+      timestamp: new Date(startedAtMs + (streams.time?.data[i] ?? 0) * 1000),
+      elapsedSec: streams.time?.data[i] ?? 0,
+      distanceM: streams.distance?.data[i],
+      latitude: streams.latlng?.data[i]?.[0],
+      longitude: streams.latlng?.data[i]?.[1],
+      altitudeM: streams.altitude?.data[i],
+      heartRate: roundOrUndefined(streams.heartrate?.data[i]),
+      cadence: roundOrUndefined(streams.cadence?.data[i]),
+      power: roundOrUndefined(streams.watts?.data[i]),
+      speedMPerSec: streams.velocity_smooth?.data[i],
+    }));
+
+    // Activité, laps et points en une seule écriture imbriquée, donc dans une
+    // transaction : pas d'activité à moitié importée (cf. ActivitiesService).
+    let activity: Prisma.ActivityGetPayload<{ include: { laps: true } }>;
+    try {
+      activity = await this.prisma.activity.create({
+        data: {
+          athleteId,
+          source: ActivitySource.STRAVA,
+          fileHash,
+          stravaActivityId,
+          sport: detail.sport_type,
+          labels: mapStravaLabels(detail),
+          startedAt,
+          totalDistanceM: detail.distance,
+          totalDurationSec: Math.round(detail.elapsed_time),
+          avgHeartRate: roundOrUndefined(detail.average_heartrate),
+          maxHeartRate: roundOrUndefined(detail.max_heartrate),
+          avgCadence: roundOrUndefined(detail.average_cadence),
+          avgPower: roundOrUndefined(detail.average_watts),
+          totalCalories: roundOrUndefined(detail.calories),
+          elevationGainM: detail.total_elevation_gain,
+          athleteNote: options.athleteNote,
+          difficultyNote: options.difficultyNote,
+          workoutId: options.workoutId ?? undefined,
+          laps: {
+            create: laps.map((lap, position) => ({
+              index: lap.lap_index,
+              ...lapIntensities[position],
+              distanceM: lap.distance,
+              durationSec: lap.moving_time,
+              avgPaceSecPerKm: lap.average_speed
+                ? 1000 / lap.average_speed
+                : undefined,
+              avgHeartRate: roundOrUndefined(lap.average_heartrate),
+              maxHeartRate: roundOrUndefined(lap.max_heartrate),
+              avgCadence: roundOrUndefined(lap.average_cadence),
+              avgPower: roundOrUndefined(lap.average_watts),
+            })),
+          },
+          trackPoints: { createMany: { data: trackPoints } },
+        },
+        include: { laps: true },
       });
+    } catch (error) {
+      // Synchronisation et import manuel simultanés de la même activité : la
+      // contrainte unique départage, le perdant reçoit le 409 habituel.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException(
+          'Cette activité Strava a déjà été importée',
+        );
+      }
+      throw error;
     }
 
     this.logger.log(

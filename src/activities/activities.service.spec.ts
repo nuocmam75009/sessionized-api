@@ -7,6 +7,7 @@ import {
   LapIntensity,
   LapIntensitySource,
 } from '../../generated/prisma/enums';
+import { Prisma } from '../../generated/prisma/client';
 
 type InsertedRow = Record<string, unknown>;
 
@@ -95,6 +96,7 @@ function buildHarness(
         .mockResolvedValue(buildStravaActivity(activityOverrides)),
       findFirst: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockReturnValue('update-op'),
+      create: jest.fn(),
     },
     lap: {
       deleteMany: jest.fn().mockReturnValue('lap-delete-op'),
@@ -261,5 +263,53 @@ describe('ActivitiesService.attachFitFile', () => {
     await expect(
       service.attachFitFile('user-1', 'act-1', undefined),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('ActivitiesService.upload', () => {
+  const uniqueViolation = () =>
+    new Prisma.PrismaClientKnownRequestError(
+      'Unique constraint failed on the fields: (`athleteId`,`fileHash`)',
+      { code: 'P2002', clientVersion: 'test' },
+    );
+
+  it('écrit activité, laps et points en une seule écriture imbriquée', async () => {
+    const { service, prisma } = buildHarness();
+    prisma.activity.findUnique.mockResolvedValue(null);
+    prisma.activity.create.mockResolvedValue({
+      ...buildStravaActivity({ source: ActivitySource.FIT }),
+      laps: [],
+    });
+
+    await service.upload('user-1', FIT_FILE, {});
+
+    const calls = prisma.activity.create.mock.calls as Array<
+      [{ data: { trackPoints?: unknown; laps?: unknown } }]
+    >;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].data.trackPoints).toEqual({ createMany: { data: [] } });
+    expect(calls[0][0].data.laps).toBeDefined();
+  });
+
+  it('doublon simultané : la contrainte unique donne un 409, pas un 500', async () => {
+    const { service, prisma } = buildHarness();
+    // Les deux requêtes ont passé la vérification : aucune activité trouvée…
+    prisma.activity.findUnique.mockResolvedValue(null);
+    // …et c'est la base qui refuse la seconde.
+    prisma.activity.create.mockRejectedValue(uniqueViolation());
+
+    const attempt = service.upload('user-1', FIT_FILE, {});
+    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+    await expect(attempt).rejects.toThrow('Cette activité a déjà été importée');
+  });
+
+  it('une autre erreur de base reste une erreur', async () => {
+    const { service, prisma } = buildHarness();
+    prisma.activity.findUnique.mockResolvedValue(null);
+    prisma.activity.create.mockRejectedValue(new Error('connexion perdue'));
+
+    await expect(service.upload('user-1', FIT_FILE, {})).rejects.toThrow(
+      'connexion perdue',
+    );
   });
 });

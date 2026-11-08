@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv } from './config/env.validation';
 import { AppController } from './app.controller';
@@ -17,6 +17,7 @@ import { StravaModule } from './strava/strava.module';
 import { TrainingLoadModule } from './training-load/training-load.module';
 import { HealthModule } from './health/health.module';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     AppService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+    { provide: APP_FILTER, useClass: PrismaExceptionFilter },
   ],
 })
 export class AppModule {}
