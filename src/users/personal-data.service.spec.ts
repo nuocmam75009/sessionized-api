@@ -99,7 +99,6 @@ describe('PersonalDataService', () => {
           coachRatings: [],
           trainingLoads: [],
           plans: [],
-          conversations: [],
           activities: [
             {
               id: 'activity-1',

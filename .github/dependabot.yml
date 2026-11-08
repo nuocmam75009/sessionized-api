@@ -24,3 +24,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Versions majeures de Node : à la main, de LTS en LTS (22, 24…). Dependabot
+    # proposait Node 25, version impaire maintenue six mois seulement.
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

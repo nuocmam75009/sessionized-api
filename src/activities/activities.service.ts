@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import FitParser from 'fit-file-parser';
 import { XMLParser } from 'fast-xml-parser';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../prisma/prisma-errors';
 import { UsersService } from '../users/users.service';
 import {
   ActivitySource,
@@ -89,44 +90,53 @@ export class ActivitiesService {
       `athlète=${athlete.id}`,
     );
 
-    const activity = await this.prisma.activity.create({
-      data: {
-        athleteId: athlete.id,
-        source: ActivitySource.FIT,
-        fileHash,
-        fitFileHash: fileHash,
-        fitFileData: new Uint8Array(file.buffer),
-        sport: session.sport,
-        subSport: session.sub_sport,
-        startedAt: new Date(session.start_time),
-        totalDistanceM: session.total_distance ?? 0,
-        totalDurationSec: Math.round(session.total_elapsed_time ?? 0),
-        avgHeartRate: roundOrUndefined(session.avg_heart_rate),
-        maxHeartRate: roundOrUndefined(session.max_heart_rate),
-        avgCadence: roundOrUndefined(session.avg_cadence),
-        avgPower: roundOrUndefined(session.avg_power),
-        totalCalories: roundOrUndefined(session.total_calories),
-        elevationGainM: session.total_ascent,
-        elevationLossM: session.total_descent,
-        athleteNote,
-        difficultyNote,
-        workoutId: workoutId ?? undefined,
-        laps: { create: buildFitLapRows(parsed.laps) },
-      },
-      include: { laps: true },
-    });
+    const startedAt = new Date(session.start_time);
+    const trackPoints = buildFitTrackPointRows(parsed.records, startedAt);
 
-    const trackPoints = buildFitTrackPointRows(
-      parsed.records,
-      activity.startedAt,
-    );
-    if (trackPoints.length > 0) {
-      await this.prisma.trackPoint.createMany({
-        data: trackPoints.map((point) => ({
-          ...point,
-          activityId: activity.id,
-        })),
+    // Activité, laps et points en une seule écriture imbriquée, que Prisma
+    // exécute dans une transaction : un échec au milieu ne laisse jamais une
+    // activité sans ses points, que l'athlète ne pourrait plus réimporter
+    // (le hash serait déjà pris).
+    let activity: Prisma.ActivityGetPayload<{ include: { laps: true } }>;
+    try {
+      activity = await this.prisma.activity.create({
+        data: {
+          athleteId: athlete.id,
+          source: ActivitySource.FIT,
+          fileHash,
+          fitFileHash: fileHash,
+          fitFileData: new Uint8Array(file.buffer),
+          sport: session.sport,
+          subSport: session.sub_sport,
+          startedAt,
+          totalDistanceM: session.total_distance ?? 0,
+          totalDurationSec: Math.round(session.total_elapsed_time ?? 0),
+          avgHeartRate: roundOrUndefined(session.avg_heart_rate),
+          maxHeartRate: roundOrUndefined(session.max_heart_rate),
+          avgCadence: roundOrUndefined(session.avg_cadence),
+          avgPower: roundOrUndefined(session.avg_power),
+          totalCalories: roundOrUndefined(session.total_calories),
+          elevationGainM: session.total_ascent,
+          elevationLossM: session.total_descent,
+          athleteNote,
+          difficultyNote,
+          workoutId: workoutId ?? undefined,
+          laps: { create: buildFitLapRows(parsed.laps) },
+          trackPoints: { createMany: { data: trackPoints } },
+        },
+        include: { laps: true },
       });
+    } catch (error) {
+      // Deux envois simultanés du même fichier passent tous deux la
+      // vérification ci-dessus : la contrainte unique (athleteId, fileHash)
+      // départage, et le second reçoit le même 409 qu'un envoi successif.
+      if (isUniqueViolation(error)) {
+        this.logger.warn(
+          `Upload refusé : doublon simultané (hash=${fileHash.slice(0, 12)}…, athlète=${athlete.id})`,
+        );
+        throw new ConflictException('Cette activité a déjà été importée');
+      }
+      throw error;
     }
 
     this.logger.log(

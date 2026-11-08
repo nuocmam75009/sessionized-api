@@ -55,7 +55,7 @@ describe('Droits RGPD (e2e)', () => {
     });
     const token = new JwtService().sign(
       { sub: user.id, email, role },
-      { secret: E2E_JWT_SECRET, expiresIn: '1h' },
+      { secret: E2E_JWT_SECRET, expiresIn: '1h', jwtid: randomUUID() },
     );
     return { email, token, userId: user.id };
   }

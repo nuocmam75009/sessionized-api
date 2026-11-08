@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { LoginAttemptsService } from './login-attempts.service';
+import { TokenRevocationService } from './token-revocation.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
 
@@ -29,7 +30,12 @@ type ExpiresIn = number | `${number}${'s' | 'm' | 'h' | 'd'}`;
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, LoginAttemptsService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    LoginAttemptsService,
+    TokenRevocationService,
+  ],
   exports: [AuthService],
 })
 export class AuthModule {}

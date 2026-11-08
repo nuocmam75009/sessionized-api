@@ -8,7 +8,8 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ActivitySource, Role } from '../generated/prisma/enums';
-import { E2E_JWT_SECRET } from './e2e-env';
+import { E2E_APP_ROLE, E2E_JWT_SECRET } from './e2e-env';
+import { buildSyntheticFit } from './fixtures/fit-builder';
 
 // Tests de sécurité de l'API, de bout en bout : vraie application (mêmes
 // guards, pipes, en-têtes que main.ts), vraie base PostgreSQL et vrai Redis.
@@ -205,11 +206,20 @@ describe('Sécurité de l’API (e2e)', () => {
 
   describe('A07 — Authentification et jetons JWT', () => {
     const jwt = new JwtService();
+    // Revendications d'un vrai jeton d'accès, jti compris : seul le défaut
+    // que chaque test introduit (expiration, signature…) motive le refus.
     const payloadOf = (account: Account) => ({
       sub: account.userId,
       email: account.email,
       role: Role.ATHLETE,
+      jti: randomUUID(),
     });
+    // Une seconde session du même compte, comme après une autre connexion.
+    const newSession = (account: Account) =>
+      jwt.sign(payloadOf(account), {
+        secret: E2E_JWT_SECRET,
+        expiresIn: '1h',
+      });
 
     it('témoin : le jeton d’inscription donne accès au profil', async () => {
       await request(server)
@@ -283,6 +293,56 @@ describe('Sécurité de l’API (e2e)', () => {
         .expect(401);
     });
 
+    it('déconnexion : le jeton révoqué est refusé partout, les autres sessions restent ouvertes', async () => {
+      const session = newSession(athleteA);
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(session))
+        .expect(200);
+
+      await request(server)
+        .post('/auth/logout')
+        .set('Authorization', bearer(session))
+        .expect(204);
+
+      for (const path of ['/users/me', `/activities/${activityId}`]) {
+        const res = await request(server)
+          .get(path)
+          .set('Authorization', bearer(session))
+          .expect(401);
+        expect(res.body).toMatchObject({
+          message: 'Session terminée, reconnectez-vous',
+        });
+      }
+      // Ni une seconde déconnexion avec le même jeton.
+      await request(server)
+        .post('/auth/logout')
+        .set('Authorization', bearer(session))
+        .expect(401);
+
+      // Témoin : le jeton d'inscription du même compte reste valide.
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(athleteA))
+        .expect(200);
+    });
+
+    it('déconnexion sans jeton : 401', async () => {
+      await request(server).post('/auth/logout').expect(401);
+    });
+
+    it('jeton sans identifiant (jti), donc irrévocable : 401', async () => {
+      const { jti: _jti, ...withoutJti } = payloadOf(athleteA);
+      const token = jwt.sign(withoutJti, {
+        secret: E2E_JWT_SECRET,
+        expiresIn: '1h',
+      });
+      await request(server)
+        .get('/users/me')
+        .set('Authorization', bearer(token))
+        .expect(401);
+    });
+
     it('connexion : même réponse pour un email inconnu et un mauvais mot de passe', async () => {
       const unknown = await request(server)
         .post('/auth/login')
@@ -307,10 +367,14 @@ describe('Sécurité de l’API (e2e)', () => {
           .expect(401);
       }
 
-      await request(server)
+      const locked = await request(server)
         .post('/auth/login')
         .send({ email: athleteB.email, password: PASSWORD })
         .expect(429);
+      // Délai restant, pour que les fronts affichent la raison du refus.
+      const { retryAfterSec } = locked.body as { retryAfterSec: number };
+      expect(retryAfterSec).toBeGreaterThan(14 * 60);
+      expect(retryAfterSec).toBeLessThanOrEqual(15 * 60);
     });
   });
 
@@ -418,11 +482,139 @@ describe('Sécurité de l’API (e2e)', () => {
     });
   });
 
-  // Cas du jeu d'essai de l'upload (rncp/09-plans-de-tests.md) qui ne
-  // demandent pas de vrai fichier .fit ; le cas 4 (plus de 20 Mo) est couvert
-  // plus haut.
+  // L'API se connecte avec un rôle sans droit sur le schéma
+  // (scripts/grant-app-role.js) : même une injection SQL qui passerait
+  // malgré Prisma ne pourrait ni supprimer ni créer de table.
+  describe('A05 — Moindre privilège en base', () => {
+    const rejected = (sql: string) =>
+      expect(prisma.$executeRawUnsafe(sql)).rejects.toThrow(
+        /permission denied|must be owner/i,
+      );
+
+    it('témoin : l’API est connectée avec le rôle applicatif, qui lit et écrit', async () => {
+      const [{ current_user }] = await prisma.$queryRaw<
+        Array<{ current_user: string }>
+      >`SELECT current_user`;
+      expect(current_user).toBe(E2E_APP_ROLE);
+      await expect(prisma.user.count()).resolves.toBeGreaterThan(0);
+    });
+
+    it('aucune modification du schéma : DROP, CREATE, ALTER refusés', async () => {
+      await rejected('DROP TABLE "TrackPoint"');
+      await rejected('CREATE TABLE intrusion (id int)');
+      await rejected('ALTER TABLE "User" ADD COLUMN is_admin boolean');
+      await rejected('TRUNCATE "Activity"');
+    });
+
+    it('historique des migrations en lecture seule', async () => {
+      await expect(
+        prisma.$queryRawUnsafe('SELECT count(*) FROM "_prisma_migrations"'),
+      ).resolves.toBeDefined();
+      await rejected('DELETE FROM "_prisma_migrations"');
+    });
+  });
+
+  // Jeu d'essai de l'upload (rncp/09-plans-de-tests.md). Le cas 4 (plus de
+  // 20 Mo) est couvert plus haut. Les .fit valides sont synthétiques
+  // (test/fixtures/fit-builder.ts) : aucune trace GPS réelle dans le dépôt.
   describe('Jeu d’essai — upload d’un fichier .fit', () => {
     const upload = () => request(server).post('/activities/upload');
+
+    it('cas 1 : .fit valide → 201, activité, laps et points créés', async () => {
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .attach('file', buildSyntheticFit({ laps: 4 }), 'piste.fit')
+        .expect(201);
+      const body = res.body as {
+        id: string;
+        laps: unknown[];
+        trackPointsCount: number;
+        totalDistanceM: number;
+      };
+      expect(body.laps).toHaveLength(4);
+      expect(body.trackPointsCount).toBe(40);
+      expect(body.totalDistanceM).toBe(1600);
+
+      // Points réellement en base, dans la même écriture que l'activité.
+      await expect(
+        prisma.trackPoint.count({ where: { activityId: body.id } }),
+      ).resolves.toBe(40);
+    });
+
+    it('cas 2 : même fichier renvoyé → 409', async () => {
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .attach('file', buildSyntheticFit({ laps: 4 }), 'piste.fit')
+        .expect(409);
+      expect(res.body).toMatchObject({
+        message: 'Cette activité a déjà été importée',
+      });
+    });
+
+    it('cas 9 : séance d’un autre athlète → 403', async () => {
+      const otherCoachProfile = await prisma.coachProfile.findUniqueOrThrow({
+        where: { userId: otherCoach.userId },
+      });
+      const athleteBProfile = await prisma.athleteProfile.findUniqueOrThrow({
+        where: { userId: athleteB.userId },
+      });
+      const workout = await prisma.workout.create({
+        data: {
+          title: 'Séance de B',
+          scheduledDate: new Date('2026-10-20T00:00:00Z'),
+          plan: {
+            create: {
+              coachId: otherCoachProfile.id,
+              athleteId: athleteBProfile.id,
+              startDate: new Date('2026-10-01T00:00:00Z'),
+            },
+          },
+        },
+      });
+
+      const res = await upload()
+        .set('Authorization', bearer(athleteA))
+        .field('workoutId', workout.id)
+        .attach(
+          'file',
+          buildSyntheticFit({ startedAt: new Date('2026-10-20T07:00:00Z') }),
+          'seance.fit',
+        )
+        .expect(403);
+      expect(res.body).toMatchObject({
+        message: 'Ce workout ne vous appartient pas',
+      });
+    });
+
+    it('cas 11 : deux envois simultanés → un 201 et un 409, jamais de 500', async () => {
+      const fit = buildSyntheticFit({
+        startedAt: new Date('2026-10-22T07:00:00Z'),
+        laps: 6,
+      });
+      const send = () =>
+        upload()
+          .set('Authorization', bearer(athleteA))
+          .attach('file', fit, 'simultane.fit');
+
+      const responses = await Promise.all([send(), send()]);
+      expect(responses.map((res) => res.status).sort()).toEqual([201, 409]);
+
+      const created = responses.find((res) => res.status === 201);
+      const { id } = created?.body as { id: string };
+      // Une seule activité, complète : pas de demi-import du perdant.
+      const activities = await prisma.activity.findMany({
+        where: {
+          athlete: { userId: athleteA.userId },
+          startedAt: new Date('2026-10-22T07:00:00Z'),
+        },
+        include: { _count: { select: { laps: true, trackPoints: true } } },
+      });
+      expect(activities).toHaveLength(1);
+      expect(activities[0]).toMatchObject({
+        id,
+        _count: { laps: 6, trackPoints: 60 },
+      });
+    });
 
     it('cas 3 : un .gpx sur /activities/upload est refusé (400)', async () => {
       const res = await upload()

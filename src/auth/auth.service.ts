@@ -7,12 +7,14 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'node:crypto';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { LoginAttemptsService } from './login-attempts.service';
+import { TokenRevocationService } from './token-revocation.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { JwtPayload } from './types/jwt-payload.interface';
+import { AccessTokenClaims, JwtPayload } from './types/jwt-payload.interface';
 import { Role } from '../../generated/prisma/enums';
 
 const BCRYPT_SALT_ROUNDS = 10;
@@ -31,6 +33,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly loginAttempts: LoginAttemptsService,
+    private readonly revocation: TokenRevocationService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -74,8 +77,14 @@ export class AuthService {
     );
     if (retryAfterSeconds > 0) {
       this.logger.warn(`Connexion refusée : trop de tentatives (${dto.email})`);
+      // retryAfterSec : le délai en clair pour les clients, qui affichent
+      // leur propre message (le front athlète est en anglais).
       throw new HttpException(
-        `Trop de tentatives de connexion. Réessayez dans ${Math.ceil(retryAfterSeconds / 60)} min.`,
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Trop de tentatives de connexion. Réessayez dans ${Math.ceil(retryAfterSeconds / 60)} min.`,
+          retryAfterSec: retryAfterSeconds,
+        },
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
@@ -96,6 +105,15 @@ export class AuthService {
     return this.buildToken(user);
   }
 
+  /**
+   * Déconnexion : le jeton présenté est révoqué jusqu'à son expiration. Il a
+   * déjà été vérifié par le JwtAuthGuard, ses revendications sont fiables.
+   */
+  async logout(claims: AccessTokenClaims): Promise<void> {
+    await this.revocation.revoke(claims.jti, claims.exp);
+    this.logger.log(`Déconnexion : jeton révoqué (id=${claims.sub})`);
+  }
+
   private buildToken(user: AuthenticatedUser) {
     const payload: JwtPayload = {
       sub: user.id,
@@ -104,7 +122,8 @@ export class AuthService {
     };
 
     return {
-      accessToken: this.jwtService.sign(payload),
+      // jti : identifiant unique du jeton, qui permet de le révoquer seul.
+      accessToken: this.jwtService.sign(payload, { jwtid: randomUUID() }),
       user: payload,
     };
   }

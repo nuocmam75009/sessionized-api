@@ -1,12 +1,16 @@
 # Sessionized API
 
-Backend NestJS de la plateforme **Sessionized** — application de coaching sportif permettant à un coach de planifier des séances et à un athlète d'analyser ses performances via l'upload de fichiers `.fit`.
+Backend NestJS de la plateforme **Sessionized** — application de coaching sportif permettant à un coach de planifier des séances et à un athlète d'analyser ses performances via l'upload de fichiers `.fit` ou l'import de ses activités Strava.
 
 ---
 
 ## Concept
 
-Sessionized met en relation des coachs et des athlètes autour de l'analyse de séances d'entraînement. L'athlète uploade son fichier `.fit` directement depuis sa montre (Garmin, Coros, Polar), le backend parse les données lap par lap et les compare au plan prescrit par le coach. Un **Warning Engine** génère automatiquement des alertes en cas d'écart significatif.
+Sessionized met en relation des coachs et des athlètes autour de l'analyse de séances d'entraînement. Le coach construit un plan (séances prescrites, jours de course) ; l'athlète importe ses activités, soit en uploadant le fichier `.fit` de sa montre (Garmin, Coros, Polar), soit depuis Strava. Le backend parse les données lap par lap et calcule :
+
+- l'intensité de chaque lap et le temps passé dans chaque zone de fréquence cardiaque ;
+- l'analyse de la réponse aérobie d'une séance (dérive allure / FC) ;
+- la charge d'entraînement dans le temps (CTL / ATL / TSB, modèle de Banister), calculée à la demande.
 
 ---
 
@@ -16,14 +20,12 @@ Sessionized met en relation des coachs et des athlètes autour de l'analyse de s
 |---|---|
 | Framework | NestJS (Node.js + TypeScript) |
 | Base de données | PostgreSQL |
-| Base clé-valeur | Redis (ioredis) — limitation des tentatives de connexion |
+| Base clé-valeur | Redis (ioredis) — limitation des tentatives de connexion, révocation des jetons |
 | ORM | Prisma |
 | Authentification | JWT maison (Passport.js + bcrypt) |
 | Upload fichiers | Multer |
 | Parser FIT | fit-file-parser |
-| Paiement | Stripe Connect |
-| Temps réel | WebSockets (NestJS Gateway) |
-| Tâches planifiées | NestJS Scheduler (cron) |
+| Intégration externe | API Strava (OAuth 2.0) |
 
 ---
 
@@ -32,17 +34,22 @@ Sessionized met en relation des coachs et des athlètes autour de l'analyse de s
 ```
 sessionized-api/
 ├── src/
-│   ├── auth/              # JWT, stratégies Passport, guards, décorateurs
-│   ├── users/             # Gestion des utilisateurs (ATHLETE / COACH)
-│   ├── activities/        # Upload FIT, parsing, persistance
-│   ├── plans/             # Séances planifiées et laps cibles
-│   ├── analysis/          # Calcul CTL / ATL / TSB (formule Banister)
-│   ├── warnings/          # Warning Engine — 4 familles de règles
-│   ├── notifications/     # WebSocket Gateway — push temps réel
-│   ├── stripe/            # Stripe Connect — abonnements et commission
-│   └── prisma/            # Schema, migrations, PrismaService
+│   ├── auth/              # Inscription, connexion, JWT, guards, politique de mots de passe
+│   ├── users/             # Comptes ATHLETE / COACH, profils, relation coach-athlète, données personnelles (RGPD)
+│   ├── activities/        # Upload .fit/.gpx, parsing, déduplication, analyse (zones FC, réponse aérobie)
+│   ├── plans/             # Plans d'entraînement
+│   ├── workouts/          # Séances prescrites et leurs laps cibles
+│   ├── race-days/         # Jours de course d'un plan
+│   ├── training-load/     # Charge d'entraînement CTL / ATL / TSB
+│   ├── strava/            # OAuth Strava, import et synchronisation des activités
+│   ├── health/            # GET /health (base et Redis)
+│   ├── redis/             # Client Redis partagé
+│   ├── prisma/            # PrismaService, garde-fou des migrations
+│   ├── config/            # Validation des variables d'environnement
+│   └── common/            # Intercepteur de logs, transformations
 ├── prisma/
-│   └── schema.prisma
+│   ├── schema.prisma
+│   └── migrations/
 ├── scripts/
 │   └── migrate.js         # bascule sur DATABASE_URL_UNPOOLED avant `prisma migrate`
 └── .env.example
@@ -54,34 +61,29 @@ sessionized-api/
 
 ```
 User (ATHLETE | COACH)
-  ├── AthleteProfile       → coaché par un CoachProfile
-  ├── CoachProfile         → gère N AthleteProfiles
-  ├── CorosToken           → token API Coros (si accès accordé)
-  └── Subscription         → abonnement Stripe actif
-
-Activity (source : FIT | COROS)
-  ├── Lap[]                → données lap par lap (allure, FC, cadence, puissance)
-  ├── Warning[]            → alertes générées automatiquement
-  └── PlannedSession?      → séance prescrite associée (optionnel)
-
-TrainingLoad
-  └── CTL / ATL / TSB      → calculé quotidiennement par cron
+  ├── AthleteProfile       → coaché par un CoachProfile, zones FC et d'allure
+  │     ├── StravaToken    → jetons OAuth Strava, chiffrés
+  │     ├── Activity[]     → séances réalisées (source : FIT | STRAVA | COROS)
+  │     │     ├── Lap[]         → données lap par lap (allure, FC, cadence, puissance, intensité)
+  │     │     ├── TrackPoint[]  → échantillons seconde par seconde (FC, allure, position)
+  │     │     └── RoutePoint[]  → trace GPS issue du .gpx
+  │     ├── Plan[]         → plans du coach
+  │     │     ├── Workout[]  → séances prescrites et leurs WorkoutLap[]
+  │     │     └── RaceDay[]  → jours de course
+  │     └── TrainingLoad[] → points CTL / ATL / TSB
+  └── CoachProfile         → gère N AthleteProfiles, notes reçues (CoachRating)
 ```
+
+`Warning`, `Subscription` et `CorosToken` existent dans le schéma pour les évolutions décrites plus bas, mais aucun code ne les alimente encore.
 
 ---
 
-## Warning Engine
+## Évolutions identifiées (hors périmètre actuel)
 
-C'est le cœur métier de l'application. Déclenché automatiquement après chaque upload de fichier `.fit`, il analyse l'activité selon 4 familles de règles :
-
-| Famille | Déclencheur | Exemple |
-|---|---|---|
-| **Intensité** | Lap trop rapide ou trop lent vs prescrit | Réalisé 1'33"/400m, prescrit 1'50" → critique |
-| **Charge** | TSB < -25 ou pic ATL > 130% CTL | Surcharge chronique → récupération recommandée |
-| **Pattern** | Même erreur sur 3 séances consécutives | Systématiquement trop rapide → revoir allures |
-| **Récupération** | Moins de 18h entre deux séances intensives | Risque de blessure → délai insuffisant |
-
-Chaque warning a une sévérité (`INFO`, `WARNING`, `CRITICAL`) et une suggestion concrète. Les warnings `CRITICAL` déclenchent une notification WebSocket en temps réel vers l'app coach.
+- **Moteur d'alertes** : comparer chaque activité à la séance prescrite et générer des alertes (intensité, charge, répétition d'une même erreur, récupération insuffisante) avec une sévérité `INFO`, `WARNING` ou `CRITICAL`. La table `Warning` et ses énumérations sont prêtes ; ni service ni route ne les utilisent.
+- **Paiement** : abonnement de l'athlète à son coach via Stripe Connect (modèle marketplace). Table `Subscription` prête, aucune intégration.
+- **Import Coros** : second fournisseur branché sur le même pipeline que le `.fit` si Coros ouvre son API.
+- **Chat** : retiré le 08/11/2026 (tables supprimées par la migration `20261108090000_drop_chat`). Il exposait le JWT de session au JavaScript du front pour ouvrir le WebSocket ; une réintroduction passerait par un jeton dédié, court et à usage unique.
 
 ---
 
@@ -91,7 +93,8 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 
 - L'utilisateur s'inscrit avec email + mot de passe
 - Politique de mots de passe de la CNIL (délibération n° 2022-100, cas « mot de passe et restriction d'accès », puisque les connexions sont limitées) : au moins 8 caractères mêlant 3 types parmi majuscules, minuscules, chiffres et caractères spéciaux, ou une phrase d'au moins 5 mots, ou au moins 16 chiffres. Refusés aussi : mots de passe courants ou prévisibles, et ceux qui contiennent le nom, l'e-mail ou le nom du service. Le message d'erreur donne la raison du refus ([src/auth/password-policy.ts](src/auth/password-policy.ts)). La règle s'applique à l'inscription, pas à la connexion des comptes existants
-- Le token JWT contient `{ sub, role, email }`
+- Le token JWT contient `{ sub, role, email }` et un identifiant unique `jti`
+- `POST /auth/logout` révoque le jeton présenté : son `jti` est inscrit dans Redis (`revoked-jwt:<jti>`) jusqu'à l'expiration du jeton, et toute route le refuse ensuite (401). Les autres sessions du compte restent ouvertes. Si Redis est en panne, la vérification laisse passer (même choix que la limitation des tentatives) et la déconnexion répond 503
 - Le rôle (`ATHLETE` ou `COACH`) est vérifié par un `RolesGuard` sur chaque endpoint
 - Un athlète ne peut jamais accéder aux routes coach et vice versa
 - Emails normalisés en minuscules (inscription, connexion, recherche)
@@ -100,8 +103,7 @@ JWT maison — pas d'IDP externe (pas d'Auth0).
 ### Sécurité HTTP
 
 - En-têtes de sécurité via `helmet` (CSP, HSTS, `nosniff`…)
-- CORS limité aux frontends listés dans `CORS_ORIGINS`, pour l'API REST comme pour le WebSocket du chat
-- Payloads WebSocket du chat validés avec les mêmes règles que les DTO REST ; l'événement `typing` n'est relayé qu'à l'autre participant de la conversation
+- CORS limité aux frontends listés dans `CORS_ORIGINS`
 - Tokens Strava chiffrés en base (AES-256-GCM, clé `STRAVA_TOKEN_ENCRYPTION_KEY`)
 - Variables d'environnement validées au démarrage (`src/config/env.validation.ts`) : l'API refuse de démarrer si la config est incomplète
 - Swagger (`/docs`) masqué par défaut en production
@@ -116,11 +118,7 @@ L'athlète uploade manuellement son fichier `.fit` depuis son interface. Le back
 1. Reçoit le fichier via `POST /activities/upload`
 2. Calcule un hash SHA-256 pour détecter les doublons
 3. Parse les laps avec `fit-file-parser`
-4. Persiste l'activité et ses laps en base
-5. Déclenche le Warning Engine
-6. Notifie en temps réel via WebSocket
-
-> Si l'API Coros est accordée, un second provider viendra brancher ses données sur le même pipeline sans modifier la logique métier.
+4. Persiste l'activité, ses laps et ses points de mesure en base
 
 ### Import Strava (alternative à l'upload manuel)
 
@@ -130,17 +128,6 @@ Plutôt que d'uploader `.fit` + `.gpx` à la main, un athlète peut connecter so
 2. L'athlète autorise l'accès sur strava.com, redirigé vers `GET /strava/callback` qui échange le `code` contre un token et le stocke chiffré (`StravaToken`, même pattern que `CorosToken`)
 3. `GET /strava/activities` → liste les activités Strava récentes (pour un sélecteur côté front), avec un flag `alreadyImported`
 4. `POST /strava/activities/:id/import` → récupère laps (`/activities/:id/laps`) + trace GPS et capteurs (`/activities/:id/streams`) auprès de l'API Strava, et alimente les mêmes tables `Activity`/`Lap`/`TrackPoint` que le pipeline `.fit` — aucun fichier `.gpx` séparé n'est nécessaire, Strava fournit position + FC/cadence/puissance dans un seul stream synchronisé.
-
----
-
-## Paiement
-
-Modèle marketplace via **Stripe Connect** :
-
-- Le coach crée un compte Stripe Express lors de son onboarding
-- L'athlète souscrit un abonnement mensuel au tarif fixé par le coach
-- Stripe répartit automatiquement : **95% coach / 5% plateforme**
-- Un webhook `invoice.paid` active l'accès de l'athlète côté backend
 
 ---
 
@@ -164,7 +151,7 @@ Copie `.env.example` en `.env` et remplis les valeurs (le détail de chacune est
 | `STRAVA_TOKEN_ENCRYPTION_KEY` | Oui si Strava est utilisé | Clé AES-256 (32 octets en base64) qui chiffre les tokens Strava en base — `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Même clé pour tous ceux qui partagent une base** : sinon les tokens des autres ne se déchiffrent plus |
 | `ATHLETE_APP_URL` | Non (défaut `http://localhost:3000`) | URL de redirection après le callback OAuth Strava |
 
-> Stripe et Coros sont mentionnés dans la stack technique cible du projet mais **pas encore implémentés** dans le code — aucune variable d'environnement associée n'est donc requise pour l'instant.
+> Stripe et Coros font partie des évolutions identifiées et ne sont **pas implémentés** : aucune variable d'environnement associée n'est requise.
 
 ### D'où vient `DATABASE_URL` ?
 
@@ -185,6 +172,41 @@ Le projet utilise une base **PostgreSQL hébergée sur Neon**, partagée entre l
 npx prisma dev --detach   # affiche directement l'URL prisma+postgres://... à coller dans DATABASE_URL
 ```
 Dans ce cas, laisse `DATABASE_URL_UNPOOLED` vide — inutile en local.
+
+---
+
+### Rôles PostgreSQL : propriétaire et application
+
+Deux rôles, selon le principe du moindre privilège :
+
+| Rôle | Connexion | Droits |
+|---|---|---|
+| Propriétaire (rôle Neon par défaut) | `DATABASE_URL_UNPOOLED`, migrations uniquement | Tous, schéma compris |
+| `sessionized_app` | `DATABASE_URL`, l'API | `SELECT`, `INSERT`, `UPDATE`, `DELETE` sur les tables ; lecture seule de `_prisma_migrations` ; ni `CREATE`, ni `ALTER`, ni `DROP`, ni `TRUNCATE` |
+
+Une injection SQL qui passerait malgré Prisma ne pourrait donc ni supprimer ni créer de table. Création ou mise à jour du rôle, avec la connexion du propriétaire (idempotent) :
+
+```bash
+APP_DB_PASSWORD='<mot de passe fort>' npm run db:grant-app-role
+```
+
+Les tests e2e tournent sous ce rôle, et vérifient qu'il ne peut pas modifier le schéma ([test/security.e2e-spec.ts](test/security.e2e-spec.ts), bloc « A05 — Moindre privilège en base »).
+
+### Jeu de données de démonstration
+
+```bash
+npm run db:seed
+```
+
+Crée un coach, deux athlètes qu'il suit, un plan de dix semaines (préparation d'un 10 km) et six semaines de séances réalisées, avec laps et points de mesure toutes les 5 s ([prisma/seed.ts](prisma/seed.ts)). Les dates suivent le jour d'exécution. Idempotent : seuls les comptes `@demo.test` sont supprimés puis recréés. Refusé si `NODE_ENV=production`. Aucune donnée réelle (noms inventés, trace GPS synthétique).
+
+| Compte | Rôle |
+|---|---|
+| `claire.martin@demo.test` | Coach |
+| `camille.durand@demo.test` | Athlète, plan et une vingtaine de séances |
+| `hugo.lefevre@demo.test` | Athlète, 3 séances |
+
+Mot de passe commun : `Tempo-Fartlek-2026`.
 
 ---
 
@@ -237,7 +259,7 @@ npm run test:e2e
 
 ## Déploiement
 
-L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railway, Fly… — pas d'hébergement serverless type Vercel. Garder **une seule instance** (socket.io sans adapter Redis ne se partage pas entre instances).
+L'API tourne comme un process Node persistant (Render, Railway, Fly…). Elle est sans état : les compteurs de tentatives de connexion et les jetons révoqués sont dans Redis, ce qui permet plusieurs instances derrière un répartiteur de charge.
 
 | Étape | Commande |
 |---|---|
@@ -247,7 +269,7 @@ L'API a besoin d'un process Node persistant (WebSocket du chat) : Render, Railwa
 | Health check | `GET /health` : 200 si la base répond (`status` `ok`, ou `degraded` si Redis est en panne), 503 sinon |
 
 - `--include=dev` est nécessaire : avec `NODE_ENV=production`, npm n'installe pas les devDependencies, dont `@nestjs/cli` qui sert au build.
-- Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée) et `DATABASE_URL_UNPOOLED` (directe, pour les migrations).
+- Utiliser une base (ou branche) Neon **dédiée** à la prod, avec `DATABASE_URL` (poolée, rôle `sessionized_app`) et `DATABASE_URL_UNPOOLED` (directe, rôle propriétaire, pour les migrations). Voir « Rôles PostgreSQL ».
 - Variables minimales : `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `JWT_SECRET` (nouveau, ≥ 32 caractères), `CORS_ORIGINS`, `REDIS_URL`. Avec Strava : `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, `STRAVA_REDIRECT_URI=https://<api>/strava/callback`, `STRAVA_TOKEN_ENCRYPTION_KEY`, `ATHLETE_APP_URL` — et mettre à jour l'« Authorization Callback Domain » de l'app Strava.
 - Redis sur Render : créer un **Key Value** dans la même région que l'API, sans IP autorisée en externe, et copier son URL **interne** dans `REDIS_URL`.
 
@@ -279,6 +301,20 @@ Chez l'hébergeur, c'est la commande de pré-déploiement (Render : *Pre-Deploy 
 - **Pourquoi pas au démarrage** : une migration lancée par chaque conteneur qui (re)démarre couple deux opérations de nature différente. Une migration en échec fait alors redémarrer l'API en boucle, et le code applicatif doit avoir les droits de modifier le schéma. Prisma Migrate pose bien un verrou PostgreSQL (`pg_advisory_lock`) contre deux migrations simultanées, mais ne règle pas ce couplage.
 - **Garde-fou** : au démarrage, l'API compare les migrations livrées dans l'image à celles de la table `_prisma_migrations`. S'il en manque une, elle refuse de démarrer en la nommant ([src/prisma/pending-migrations.ts](src/prisma/pending-migrations.ts)) : un oubli de l'étape fait échouer le déploiement de façon visible, au lieu d'exécuter le nouveau code sur l'ancien schéma.
 - **Avant la production** : chaque PR applique toutes les migrations sur une base vierge (tests e2e) et vérifie que le schéma obtenu est exactement `schema.prisma` (`prisma migrate diff --exit-code`, voir « Intégration continue »). Pour une migration délicate, l'appliquer d'abord sur une branche Neon copiée de la production.
+
+### Sauvegarde et restauration
+
+- **Production (Neon)** : restauration de la base à un instant donné (*point-in-time restore*), dans la fenêtre d'historique de l'offre Neon. C'est la parade à une migration destructive ou à une suppression accidentelle.
+- **Sauvegarde logique**, indépendante de l'hébergeur, avant une migration délicate ou pour archiver :
+
+  ```bash
+  pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL_UNPOOLED" > sessionized-$(date +%F).dump
+  pg_restore --no-owner --no-privileges --exit-on-error --dbname="<base vierge>" sessionized-AAAA-MM-JJ.dump
+  APP_DB_PASSWORD='…' npm run db:grant-app-role   # droits du rôle applicatif sur la base restaurée
+  ```
+
+  `pg_dump` doit être d'une version au moins égale à celle du serveur (PostgreSQL 17). Le fichier contient des données de santé : il se chiffre et se stocke hors du dépôt.
+- **Procédure testée** : [scripts/backup-restore-check.sh](scripts/backup-restore-check.sh) sauvegarde la base de test, la restaure dans une base vierge et compare table par table le nombre de lignes et une empreinte MD5 du contenu. Il échoue au moindre écart (vérifié en supprimant une ligne de la copie).
 
 ### Retour arrière
 
