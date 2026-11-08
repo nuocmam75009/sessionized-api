@@ -13,6 +13,19 @@ updates:
         patterns: ["@nestjs/*"]
       prisma:
         patterns: ["prisma", "@prisma/*"]
+    # Versions majeures du framework, de l'ORM et des types Node : à la main,
+    # sur une branche dédiée. NestJS 12 (PR #39) cassait npm ci, @nestjs/throttler
+    # n'acceptant pas encore cette version ; @types/node doit suivre la version
+    # de Node réellement exécutée (22), pas la dernière publiée (PR #38).
+    ignore:
+      - dependency-name: "@nestjs/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "prisma"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@prisma/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
