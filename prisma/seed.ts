@@ -159,6 +159,7 @@ function buildActivity(startedAt: Date, segments: Segment[]) {
     const pace = segment.paceSecPerKm * (1 + jitter(0.02));
     const speed = 1000 / pace;
     const durationSec = segment.distanceM / speed;
+    const startElapsedSec = elapsed;
     const lapHeartRates: number[] = [];
 
     for (let t = 0; t < durationSec; t += SAMPLE_SEC) {
@@ -188,6 +189,7 @@ function buildActivity(startedAt: Date, segments: Segment[]) {
       intensitySource: LapIntensitySource.DEVICE,
       distanceM: Math.round(segment.distanceM),
       durationSec: Math.round(durationSec),
+      startElapsedSec: Math.round(startElapsedSec * 10) / 10,
       avgPaceSecPerKm: Math.round(pace * 10) / 10,
       avgHeartRate: Math.round(
         lapHeartRates.reduce((a, b) => a + b, 0) / lapHeartRates.length,

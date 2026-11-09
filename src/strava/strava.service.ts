@@ -27,6 +27,7 @@ import {
   nextRateLimitReset,
 } from './strava-rate-limit';
 import { deriveLapIntensities } from '../activities/lap-intensity';
+import { stravaLapStartSec } from '../activities/lap-start';
 
 const STRAVA_AUTHORIZE_URL = 'https://www.strava.com/oauth/authorize';
 const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token';
@@ -74,6 +75,10 @@ interface StravaLap {
   lap_index: number;
   distance: number;
   moving_time: number;
+  // Premier échantillon du lap dans les streams, et son heure de départ :
+  // situent le lap sur la trace (cf. stravaLapStartSec).
+  start_index?: number;
+  start_date?: string;
   average_speed?: number;
   average_heartrate?: number;
   max_heartrate?: number;
@@ -429,6 +434,11 @@ export class StravaService {
               ...lapIntensities[position],
               distanceM: lap.distance,
               durationSec: lap.moving_time,
+              startElapsedSec: stravaLapStartSec(
+                lap,
+                streams.time?.data,
+                startedAt,
+              ),
               avgPaceSecPerKm: lap.average_speed
                 ? 1000 / lap.average_speed
                 : undefined,

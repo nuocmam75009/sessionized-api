@@ -20,18 +20,20 @@ const inOneHour = () => new Date(Date.now() + 60 * 60 * 1000);
 
 // Service réel, dépendances réduites à ce que syncActivities touche jusqu'aux
 // appels Strava d'un import : profil athlète, token enregistré, activités déjà
-// importées (aucune).
-function makeService(storedToken: {
+// importées (aucune), et l'écriture de l'activité importée.
+function makeHarness(storedToken: {
   accessToken: string;
   refreshToken: string;
   expiresAt: Date;
 }) {
+  const activity = {
+    findMany: jest.fn().mockResolvedValue([]),
+    findUnique: jest.fn().mockResolvedValue(null),
+    create: jest.fn().mockResolvedValue({ id: 'act-1', laps: [] }),
+  };
   const prisma = {
     stravaToken: { findUnique: jest.fn().mockResolvedValue(storedToken) },
-    activity: {
-      findMany: jest.fn().mockResolvedValue([]),
-      findUnique: jest.fn().mockResolvedValue(null),
-    },
+    activity,
   } as unknown as PrismaService;
   const activitiesService = {
     findUnlinkedWorkoutIdForDate: jest.fn().mockResolvedValue(undefined),
@@ -45,7 +47,7 @@ function makeService(storedToken: {
     STRAVA_CLIENT_SECRET: 'secret',
   });
 
-  return new StravaService(
+  const service = new StravaService(
     prisma,
     usersService,
     activitiesService,
@@ -53,6 +55,11 @@ function makeService(storedToken: {
     new JwtService(),
     currentCipher,
   );
+  return { service, activityCreate: activity.create };
+}
+
+function makeService(storedToken: Parameters<typeof makeHarness>[0]) {
+  return makeHarness(storedToken).service;
 }
 
 function syncError(service: StravaService): Promise<unknown> {
@@ -225,5 +232,45 @@ describe('StravaService.syncActivities — quota Strava épuisé (429)', () => {
     // demandée à Strava.
     const calledUrls = fetchSpy.mock.calls.map(([url]) => String(url));
     expect(calledUrls.some((url) => url.includes('/activities/2'))).toBe(false);
+  });
+});
+
+describe('StravaService.importActivity — laps situés sur la trace', () => {
+  beforeAll(() => {
+    Logger.overrideLogger(false);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('prend le départ de chaque lap dans le stream `time`, arrêts compris', async () => {
+    // Deux laps de 3 s en mouvement, séparés par un arrêt de 40 s : la somme
+    // des `moving_time` placerait le second à 3 s, la trace le place à 43 s.
+    const laps = [
+      { lap_index: 1, distance: 15, moving_time: 3, start_index: 0 },
+      { lap_index: 2, distance: 15, moving_time: 3, start_index: 3 },
+    ];
+    const streams = { time: { data: [0, 1, 2, 43, 44, 45] } };
+    const fetchSpy: jest.SpyInstance = jest.spyOn(globalThis, 'fetch');
+    fetchSpy.mockImplementation((url: string) => {
+      if (url.endsWith('/laps')) return Promise.resolve(jsonResponse(laps));
+      if (url.includes('/streams')) {
+        return Promise.resolve(jsonResponse(streams));
+      }
+      return Promise.resolve(jsonResponse(summaryActivity(1)));
+    });
+    const { service, activityCreate } = makeHarness({
+      accessToken: currentCipher.encrypt('access'),
+      refreshToken: currentCipher.encrypt('refresh'),
+      expiresAt: inOneHour(),
+    });
+
+    await service.importActivity('user-1', '1', {});
+
+    const calls = activityCreate.mock.calls as Array<
+      [{ data: { laps: { create: Array<Record<string, unknown>> } } }]
+    >;
+    expect(calls[0][0].data.laps.create).toMatchObject([
+      { durationSec: 3, startElapsedSec: 0 },
+      { durationSec: 3, startElapsedSec: 43 },
+    ]);
   });
 });

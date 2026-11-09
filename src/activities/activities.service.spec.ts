@@ -56,7 +56,7 @@ function buildParsedFit(overrides: Record<string, unknown> = {}) {
         avg_step_length: 1420,
       },
       {
-        start_time: STARTED_AT.toISOString(),
+        start_time: new Date(STARTED_AT.getTime() + 78_000).toISOString(),
         intensity: 'recovery',
         total_distance: 32.5,
         total_elapsed_time: 120,
@@ -148,6 +148,21 @@ describe('ActivitiesService.attachFitFile', () => {
       intensitySource: LapIntensitySource.DEVICE,
     });
     expect(result.lapsCount).toBe(2);
+  });
+
+  it('situe chaque lap sur la trace, depuis le départ de la session du .fit', async () => {
+    // Strava date l'activité 8 s après la montre : le premier lap doit tout de
+    // même tomber à zéro, comme les points de mesure de Strava.
+    const { service, prisma } = buildHarness({
+      startedAt: new Date(STARTED_AT.getTime() + 8_000),
+    });
+
+    await service.attachFitFile('user-1', 'act-1', FIT_FILE);
+
+    expect(insertedRows(prisma.lap.createMany)).toMatchObject([
+      { startElapsedSec: 0 },
+      { startElapsedSec: 78 },
+    ]);
   });
 
   it("estime l'intensité quand le .fit ne la déclare pas", async () => {
@@ -289,6 +304,25 @@ describe('ActivitiesService.upload', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0][0].data.trackPoints).toEqual({ createMany: { data: [] } });
     expect(calls[0][0].data.laps).toBeDefined();
+  });
+
+  it('situe chaque lap sur la trace, dans le repère des points de mesure', async () => {
+    const { service, prisma } = buildHarness();
+    prisma.activity.findUnique.mockResolvedValue(null);
+    prisma.activity.create.mockResolvedValue({
+      ...buildStravaActivity({ source: ActivitySource.FIT }),
+      laps: [],
+    });
+
+    await service.upload('user-1', FIT_FILE, {});
+
+    const calls = prisma.activity.create.mock.calls as Array<
+      [{ data: { laps: { create: InsertedRow[] } } }]
+    >;
+    expect(calls[0][0].data.laps.create).toMatchObject([
+      { startElapsedSec: 0 },
+      { startElapsedSec: 78 },
+    ]);
   });
 
   it('doublon simultané : la contrainte unique donne un 409, pas un 500', async () => {

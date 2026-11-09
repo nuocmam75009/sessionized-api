@@ -22,6 +22,7 @@ import type { UploadActivityDto } from './dto/upload-activity.dto';
 import type { UpdateActivityDto } from './dto/update-activity.dto';
 import type { HrZonesQueryDto } from './dto/hr-zones-query.dto';
 import { resolveFitLapIntensities } from './lap-intensity';
+import { secondsSince } from './lap-start';
 import {
   buildHeartRateSamplesCte,
   zoneIndexExpression,
@@ -121,7 +122,7 @@ export class ActivitiesService {
           athleteNote,
           difficultyNote,
           workoutId: workoutId ?? undefined,
-          laps: { create: buildFitLapRows(parsed.laps) },
+          laps: { create: buildFitLapRows(parsed.laps, startedAt) },
           trackPoints: { createMany: { data: trackPoints } },
         },
         include: { laps: true },
@@ -469,7 +470,11 @@ export class ActivitiesService {
       );
     }
 
-    const lapRows = buildFitLapRows(parsed.laps);
+    // Les points de mesure restent ceux de Strava, dont le temps part de zéro
+    // au départ de l'activité. Le repère du .fit est le départ de sa propre
+    // session : le premier lap tombe ainsi à zéro, comme la trace, et l'écart
+    // de quelques secondes toléré ci-dessus ne décale pas tous les laps.
+    const lapRows = buildFitLapRows(parsed.laps, fitStartedAt);
     if (lapRows.length === 0) {
       throw new BadRequestException(
         'Ce fichier .fit ne contient aucun tour : rien à compléter',
@@ -734,11 +739,15 @@ type ParsedFit = Awaited<
 
 // Laps d'un .fit, prêts à être insérés (sans `activityId`, fourni par l'appelant
 // selon qu'il crée l'activité ou rattache le fichier après coup).
-function buildFitLapRows(laps: ParsedFit['laps']) {
+//
+// `sessionStart` est le départ de la session du .fit, repère des points de
+// mesure qu'il crée (cf. buildFitTrackPointRows).
+function buildFitLapRows(laps: ParsedFit['laps'], sessionStart: Date) {
   const rows = (laps ?? []).map((lap, index) => ({
     index,
     distanceM: lap.total_distance ?? 0,
     durationSec: lap.total_elapsed_time ?? 0,
+    startElapsedSec: secondsSince(sessionStart, lap.start_time),
     avgPaceSecPerKm: lap.avg_speed ? 1000 / lap.avg_speed : undefined,
     avgHeartRate: roundOrUndefined(lap.avg_heart_rate),
     maxHeartRate: roundOrUndefined(lap.max_heart_rate),

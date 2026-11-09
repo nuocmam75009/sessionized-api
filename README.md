@@ -64,7 +64,7 @@ User (ATHLETE | COACH)
   ├── AthleteProfile       → coaché par un CoachProfile, zones FC et d'allure
   │     ├── StravaToken    → jetons OAuth Strava, chiffrés
   │     ├── Activity[]     → séances réalisées (source : FIT | STRAVA | COROS)
-  │     │     ├── Lap[]         → données lap par lap (allure, FC, cadence, puissance, intensité)
+  │     │     ├── Lap[]         → données lap par lap (allure, FC, cadence, puissance, intensité, départ sur la trace)
   │     │     ├── TrackPoint[]  → échantillons seconde par seconde (FC, allure, position)
   │     │     └── RoutePoint[]  → trace GPS issue du .gpx
   │     ├── Plan[]         → plans du coach

@@ -300,6 +300,12 @@ model Lap {
   intensitySource LapIntensitySource?
   distanceM       Float
   durationSec     Float
+  // Départ du lap, en secondes depuis le début de l'activité : même repère que
+  // TrackPoint.elapsedSec, pour situer le lap sur la trace. La somme des
+  // durées des laps précédents ne le donne pas : un lap Strava compte le temps
+  // en mouvement, et chaque arrêt décalerait tous les laps suivants. Null sur
+  // les laps importés avant le champ.
+  startElapsedSec Float?
   avgPaceSecPerKm Float?
   avgHeartRate    Int?
   maxHeartRate    Int?
