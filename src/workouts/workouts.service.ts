@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
 import { UpdateWorkoutDto } from './dto/update-workout.dto';
+import type { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
 import { PlanStatus, Role } from '../../generated/prisma/enums';
 
 @Injectable()
@@ -49,6 +50,7 @@ export class WorkoutsService {
         targetDistanceM: dto.targetDistanceM,
         targetDurationSec: dto.targetDurationSec,
         targetHeartRateZone: dto.targetHeartRateZone,
+        training: dto.training,
         laps: { create: dto.laps },
       },
       include: { laps: true },
@@ -60,7 +62,10 @@ export class WorkoutsService {
     return created;
   }
 
-  async findAll(userId: string, role: Role, athleteId?: string) {
+  async findAll(userId: string, role: Role, query: ListWorkoutsQueryDto) {
+    // `training` absent vaut `undefined`, que Prisma ignore : pas de filtre.
+    const { athleteId, training } = query;
+
     if (role === Role.COACH) {
       const coach = await this.usersService.getCoachProfile(userId);
       if (!coach) {
@@ -70,6 +75,7 @@ export class WorkoutsService {
       return this.prisma.workout.findMany({
         where: {
           plan: { coachId: coach.id, ...(athleteId ? { athleteId } : {}) },
+          training,
         },
         include: { laps: true },
         orderBy: { scheduledDate: 'asc' },
@@ -82,7 +88,7 @@ export class WorkoutsService {
     }
 
     return this.prisma.workout.findMany({
-      where: { plan: { athleteId: athlete.id } },
+      where: { plan: { athleteId: athlete.id }, training },
       include: { laps: true },
       orderBy: { scheduledDate: 'asc' },
     });
@@ -103,11 +109,29 @@ export class WorkoutsService {
   }
 
   async update(coachUserId: string, id: string, dto: UpdateWorkoutDto) {
-    await this.getOwnedWorkout(coachUserId, id);
+    const workout = await this.getOwnedWorkout(coachUserId, id);
+    const trainingChanged =
+      dto.training !== undefined && dto.training !== workout.training;
 
     return this.prisma.$transaction(async (tx) => {
       if (dto.laps) {
         await tx.workoutLap.deleteMany({ where: { workoutId: id } });
+      }
+
+      // Le coach requalifie la séance : l'activité qui la réalise suit, dans
+      // un sens comme dans l'autre. Seul un changement effectif est répercuté,
+      // pour qu'un PATCH qui renvoie la même valeur n'écrase pas le choix que
+      // l'athlète a pu faire depuis.
+      if (trainingChanged) {
+        const { count } = await tx.activity.updateMany({
+          where: { workoutId: id },
+          data: { training: dto.training },
+        });
+        if (count > 0) {
+          this.logger.log(
+            `Flag training (${String(dto.training)}) répercuté sur l'activité liée au workout ${id}`,
+          );
+        }
       }
 
       return tx.workout.update({
@@ -121,6 +145,7 @@ export class WorkoutsService {
           targetDistanceM: dto.targetDistanceM,
           targetDurationSec: dto.targetDurationSec,
           targetHeartRateZone: dto.targetHeartRateZone,
+          training: dto.training,
           laps: dto.laps ? { create: dto.laps } : undefined,
         },
         include: { laps: true },

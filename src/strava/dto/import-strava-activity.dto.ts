@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -39,4 +40,13 @@ export class ImportStravaActivityDto {
   @Min(1)
   @Max(10)
   difficultyNote?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Séance de qualité, à comparer avec les autres. Par défaut : true si le workout lié est marqué training ou si Strava libelle l’activité « Workout », false sinon',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  training?: boolean;
 }

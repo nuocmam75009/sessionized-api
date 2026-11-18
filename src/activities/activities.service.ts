@@ -21,6 +21,7 @@ import { Prisma } from '../../generated/prisma/client';
 import type { UploadActivityDto } from './dto/upload-activity.dto';
 import type { UpdateActivityDto } from './dto/update-activity.dto';
 import type { HrZonesQueryDto } from './dto/hr-zones-query.dto';
+import type { ListActivitiesQueryDto } from './dto/list-activities-query.dto';
 import { resolveFitLapIntensities } from './lap-intensity';
 import { secondsSince } from './lap-start';
 import {
@@ -54,7 +55,7 @@ export class ActivitiesService {
     file: Express.Multer.File | undefined,
     dto: UploadActivityDto,
   ) {
-    const { workoutId, athleteNote, difficultyNote } = dto;
+    const { workoutId, athleteNote, difficultyNote, training } = dto;
     if (!file) {
       this.logger.warn(
         `Upload refusé pour l'utilisateur ${athleteUserId} : aucun fichier fourni`,
@@ -82,9 +83,9 @@ export class ActivitiesService {
       throw new ConflictException('Cette activité a déjà été importée');
     }
 
-    if (workoutId) {
-      await this.assertWorkoutIsAssignable(athlete.id, workoutId);
-    }
+    const workout = workoutId
+      ? await this.assertWorkoutIsAssignable(athlete.id, workoutId)
+      : undefined;
 
     const { parsed, session } = await this.parseFitFile(
       file,
@@ -121,6 +122,7 @@ export class ActivitiesService {
           elevationLossM: session.total_descent,
           athleteNote,
           difficultyNote,
+          training: training ?? workout?.training ?? false,
           workoutId: workoutId ?? undefined,
           laps: { create: buildFitLapRows(parsed.laps, startedAt) },
           trackPoints: { createMany: { data: trackPoints } },
@@ -147,7 +149,10 @@ export class ActivitiesService {
     return { ...toActivityDto(activity), trackPointsCount: trackPoints.length };
   }
 
-  async findAll(userId: string, role: Role, athleteId?: string) {
+  async findAll(userId: string, role: Role, query: ListActivitiesQueryDto) {
+    // `training` absent vaut `undefined`, que Prisma ignore : pas de filtre.
+    const { athleteId, training } = query;
+
     if (role === Role.COACH) {
       const coach = await this.usersService.getCoachProfile(userId);
       if (!coach) {
@@ -158,6 +163,7 @@ export class ActivitiesService {
         where: {
           athlete: { coachId: coach.id },
           ...(athleteId ? { athleteId } : {}),
+          training,
         },
         include: { laps: true },
         orderBy: { startedAt: 'desc' },
@@ -171,7 +177,7 @@ export class ActivitiesService {
     }
 
     const activities = await this.prisma.activity.findMany({
-      where: { athleteId: athlete.id },
+      where: { athleteId: athlete.id, training },
       include: { laps: true },
       orderBy: { startedAt: 'desc' },
     });
@@ -597,9 +603,18 @@ export class ActivitiesService {
   async update(athleteUserId: string, id: string, dto: UpdateActivityDto) {
     const activity = await this.getOwnedActivity(athleteUserId, id);
 
-    if (dto.workoutId && dto.workoutId !== activity.workoutId) {
-      await this.assertWorkoutIsAssignable(activity.athleteId, dto.workoutId);
-    }
+    const newWorkout =
+      dto.workoutId && dto.workoutId !== activity.workoutId
+        ? await this.assertWorkoutIsAssignable(
+            activity.athleteId,
+            dto.workoutId,
+          )
+        : undefined;
+
+    // Lier un workout `training` marque l'activité, sauf choix explicite dans
+    // la même requête. Lier un workout ordinaire ne retire pas le flag d'une
+    // activité déjà marquée : seul l'athlète le fait, explicitement.
+    const training = dto.training ?? (newWorkout?.training ? true : undefined);
 
     const updated = await this.prisma.activity.update({
       where: { id: activity.id },
@@ -607,10 +622,11 @@ export class ActivitiesService {
         workoutId: dto.workoutId,
         athleteNote: dto.athleteNote,
         difficultyNote: dto.difficultyNote,
+        training,
       },
       include: { laps: true },
     });
-    this.logger.log(`Note athlète mise à jour : activité id=${id}`);
+    this.logger.log(`Activité mise à jour : id=${id}`);
 
     return toActivityDto(updated);
   }
@@ -705,6 +721,9 @@ export class ActivitiesService {
         'Ce workout est déjà lié à une autre activité',
       );
     }
+
+    // Renvoyé pour que l'activité hérite de `training` sans relire le workout.
+    return workout;
   }
 
   // Utilisé par la sync Strava automatique : trouve le workout du jour (s'il

@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsNotEmpty,
@@ -61,6 +62,16 @@ export class CreateWorkoutDto {
   @IsOptional()
   @IsEnum(HeartRateZone)
   targetHeartRateZone?: HeartRateZone;
+
+  @ApiPropertyOptional({
+    description:
+      'Séance de qualité (fractionné, seuil…), à comparer avec les autres. L’activité qui réalise ce workout en hérite',
+    example: true,
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  training?: boolean;
 
   @ApiProperty({ type: [WorkoutLapDto] })
   @IsArray()

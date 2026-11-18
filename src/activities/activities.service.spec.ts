@@ -6,6 +6,7 @@ import {
   ActivitySource,
   LapIntensity,
   LapIntensitySource,
+  Role,
 } from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
 
@@ -95,8 +96,12 @@ function buildHarness(
         .fn()
         .mockResolvedValue(buildStravaActivity(activityOverrides)),
       findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockReturnValue('update-op'),
       create: jest.fn(),
+    },
+    workout: {
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     lap: {
       deleteMany: jest.fn().mockReturnValue('lap-delete-op'),
@@ -345,5 +350,145 @@ describe('ActivitiesService.upload', () => {
     await expect(service.upload('user-1', FIT_FILE, {})).rejects.toThrow(
       'connexion perdue',
     );
+  });
+});
+
+describe('ActivitiesService — flag training', () => {
+  // Workout prescrit à l'athlète du harnais ('ath-1'), libre de toute activité.
+  const workout = (training: boolean) => ({
+    id: 'w-1',
+    training,
+    plan: { athleteId: 'ath-1' },
+  });
+
+  function createdFields(mock: jest.Mock): InsertedRow {
+    const calls = mock.mock.calls as Array<[{ data: InsertedRow }]>;
+    return calls[0][0].data;
+  }
+
+  describe('upload', () => {
+    function uploadHarness() {
+      const harness = buildHarness();
+      // Ni doublon de fichier, ni activité déjà liée au workout.
+      harness.prisma.activity.findUnique.mockResolvedValue(null);
+      harness.prisma.activity.create.mockResolvedValue({
+        ...buildStravaActivity({ source: ActivitySource.FIT }),
+        laps: [],
+      });
+      return harness;
+    }
+
+    it('sans workout ni choix explicite : pas une séance de qualité', async () => {
+      const { service, prisma } = uploadHarness();
+
+      await service.upload('user-1', FIT_FILE, {});
+
+      expect(createdFields(prisma.activity.create).training).toBe(false);
+    });
+
+    it('hérite du flag du workout prescrit', async () => {
+      const { service, prisma } = uploadHarness();
+      prisma.workout.findUnique.mockResolvedValue(workout(true));
+
+      await service.upload('user-1', FIT_FILE, { workoutId: 'w-1' });
+
+      expect(createdFields(prisma.activity.create).training).toBe(true);
+    });
+
+    it("le choix explicite de l'athlète l'emporte sur le workout", async () => {
+      const { service, prisma } = uploadHarness();
+      prisma.workout.findUnique.mockResolvedValue(workout(true));
+
+      await service.upload('user-1', FIT_FILE, {
+        workoutId: 'w-1',
+        training: false,
+      });
+
+      expect(createdFields(prisma.activity.create).training).toBe(false);
+    });
+  });
+
+  describe('update', () => {
+    function updateHarness(activityOverrides: Record<string, unknown> = {}) {
+      const harness = buildHarness();
+      harness.prisma.activity.findUnique
+        // getOwnedActivity
+        .mockResolvedValueOnce(buildStravaActivity(activityOverrides))
+        // assertWorkoutIsAssignable : le workout n'est lié à aucune activité
+        .mockResolvedValueOnce(null);
+      harness.prisma.activity.update.mockResolvedValue({
+        ...buildStravaActivity(activityOverrides),
+        laps: [],
+      });
+      return harness;
+    }
+
+    it('lier un workout training marque l’activité', async () => {
+      const { service, prisma } = updateHarness();
+      prisma.workout.findUnique.mockResolvedValue(workout(true));
+
+      await service.update('user-1', 'act-1', { workoutId: 'w-1' });
+
+      expect(updatedFields(prisma.activity.update).training).toBe(true);
+    });
+
+    it('lier un workout ordinaire ne retire pas le flag', async () => {
+      const { service, prisma } = updateHarness({ training: true });
+      prisma.workout.findUnique.mockResolvedValue(workout(false));
+
+      await service.update('user-1', 'act-1', { workoutId: 'w-1' });
+
+      expect(updatedFields(prisma.activity.update).training).toBeUndefined();
+    });
+
+    it('le choix explicite l’emporte sur le workout lié dans la même requête', async () => {
+      const { service, prisma } = updateHarness();
+      prisma.workout.findUnique.mockResolvedValue(workout(true));
+
+      await service.update('user-1', 'act-1', {
+        workoutId: 'w-1',
+        training: false,
+      });
+
+      expect(updatedFields(prisma.activity.update).training).toBe(false);
+    });
+
+    it('sans workout, seul le flag change', async () => {
+      const { service, prisma } = updateHarness();
+
+      await service.update('user-1', 'act-1', { training: true });
+
+      expect(prisma.workout.findUnique).not.toHaveBeenCalled();
+      expect(updatedFields(prisma.activity.update)).toMatchObject({
+        training: true,
+        workoutId: undefined,
+      });
+    });
+  });
+
+  describe('findAll', () => {
+    function listedWhere(mock: jest.Mock): InsertedRow {
+      const calls = mock.mock.calls as Array<[{ where: InsertedRow }]>;
+      return calls[0][0].where;
+    }
+
+    it('filtre sur les séances de qualité', async () => {
+      const { service, prisma } = buildHarness();
+
+      await service.findAll('user-1', Role.ATHLETE, { training: true });
+
+      expect(listedWhere(prisma.activity.findMany)).toEqual({
+        athleteId: 'ath-1',
+        training: true,
+      });
+    });
+
+    it('sans paramètre, ne filtre pas', async () => {
+      const { service, prisma } = buildHarness();
+
+      await service.findAll('user-1', Role.ATHLETE, {});
+
+      expect(listedWhere(prisma.activity.findMany).training).toBeUndefined();
+    });
   });
 });

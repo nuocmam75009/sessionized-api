@@ -331,6 +331,7 @@ export class StravaService {
       workoutId?: string;
       athleteNote?: string;
       difficultyNote?: number;
+      training?: boolean;
     },
   ): Promise<{
     activityId: string;
@@ -347,12 +348,12 @@ export class StravaService {
       throw new ConflictException('Cette activité Strava a déjà été importée');
     }
 
-    if (options.workoutId) {
-      await this.activitiesService.assertWorkoutIsAssignable(
-        athleteId,
-        options.workoutId,
-      );
-    }
+    const workout = options.workoutId
+      ? await this.activitiesService.assertWorkoutIsAssignable(
+          athleteId,
+          options.workoutId,
+        )
+      : undefined;
 
     const accessToken = await this.getValidAccessToken(athleteId);
 
@@ -381,6 +382,12 @@ export class StravaService {
     );
 
     const startedAt = new Date(detail.start_date);
+    const labels = mapStravaLabels(detail);
+    // Séance de qualité : le choix explicite de l'athlète, sinon le workout
+    // prescrit, sinon le libellé « Workout » que l'athlète a mis sur Strava.
+    const training =
+      options.training ??
+      (workout?.training === true || labels.includes(ActivityLabel.WORKOUT));
     const lapIntensities = deriveLapIntensities(
       laps.map((lap) => ({
         distanceM: lap.distance,
@@ -415,7 +422,8 @@ export class StravaService {
           fileHash,
           stravaActivityId,
           sport: detail.sport_type,
-          labels: mapStravaLabels(detail),
+          labels,
+          training,
           startedAt,
           totalDistanceM: detail.distance,
           totalDurationSec: Math.round(detail.elapsed_time),
