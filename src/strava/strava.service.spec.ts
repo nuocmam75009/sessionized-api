@@ -37,7 +37,10 @@ function makeHarness(storedToken: {
   } as unknown as PrismaService;
   const activitiesService = {
     findUnlinkedWorkoutIdForDate: jest.fn().mockResolvedValue(undefined),
-  } as unknown as ActivitiesService;
+    assertWorkoutIsAssignable: jest
+      .fn()
+      .mockResolvedValue({ id: 'workout-1', training: false }),
+  };
   const usersService = {
     getAthleteProfile: jest.fn().mockResolvedValue({ id: 'athlete-1' }),
     updateAthleteZones: jest.fn(),
@@ -50,12 +53,12 @@ function makeHarness(storedToken: {
   const service = new StravaService(
     prisma,
     usersService,
-    activitiesService,
+    activitiesService as unknown as ActivitiesService,
     config,
     new JwtService(),
     currentCipher,
   );
-  return { service, activityCreate: activity.create };
+  return { service, activityCreate: activity.create, activitiesService };
 }
 
 function makeService(storedToken: Parameters<typeof makeHarness>[0]) {
@@ -272,5 +275,67 @@ describe('StravaService.importActivity — laps situés sur la trace', () => {
       { durationSec: 3, startElapsedSec: 0 },
       { durationSec: 3, startElapsedSec: 43 },
     ]);
+  });
+});
+
+describe('StravaService.importActivity — flag training', () => {
+  beforeAll(() => {
+    Logger.overrideLogger(false);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  // Import d'une activité sans laps ni trace, dont Strava renvoie `detail`.
+  async function importedTraining(
+    detail: Record<string, unknown>,
+    dto: { workoutId?: string; training?: boolean } = {},
+    workoutTraining = false,
+  ) {
+    const fetchSpy: jest.SpyInstance = jest.spyOn(globalThis, 'fetch');
+    fetchSpy.mockImplementation((url: string) => {
+      if (url.endsWith('/laps')) return Promise.resolve(jsonResponse([]));
+      if (url.includes('/streams')) return Promise.resolve(jsonResponse({}));
+      return Promise.resolve(jsonResponse(detail));
+    });
+    const { service, activityCreate, activitiesService } = makeHarness({
+      accessToken: currentCipher.encrypt('access'),
+      refreshToken: currentCipher.encrypt('refresh'),
+      expiresAt: inOneHour(),
+    });
+    activitiesService.assertWorkoutIsAssignable.mockResolvedValue({
+      id: 'workout-1',
+      training: workoutTraining,
+    });
+
+    await service.importActivity('user-1', '1', dto);
+
+    const calls = activityCreate.mock.calls as Array<
+      [{ data: { training: boolean } }]
+    >;
+    return calls[0][0].data.training;
+  }
+
+  it('activité libellée « Workout » sur Strava : séance de qualité', async () => {
+    await expect(
+      importedTraining({ ...summaryActivity(1), workout_type: 3 }),
+    ).resolves.toBe(true);
+  });
+
+  it('sans libellé ni workout : séance ordinaire', async () => {
+    await expect(importedTraining(summaryActivity(1))).resolves.toBe(false);
+  });
+
+  it('hérite du workout prescrit, même sans libellé Strava', async () => {
+    await expect(
+      importedTraining(summaryActivity(1), { workoutId: 'workout-1' }, true),
+    ).resolves.toBe(true);
+  });
+
+  it("le choix explicite de l'athlète l'emporte sur le libellé Strava", async () => {
+    await expect(
+      importedTraining(
+        { ...summaryActivity(1), workout_type: 3 },
+        { training: false },
+      ),
+    ).resolves.toBe(false);
   });
 });

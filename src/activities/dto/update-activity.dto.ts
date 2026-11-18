@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -37,4 +38,13 @@ export class UpdateActivityDto {
   @Min(1)
   @Max(10)
   difficultyNote?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Séance de qualité, à comparer avec les autres. Absent : lier un workout marqué training passe l’activité à true, sinon la valeur actuelle est conservée',
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  training?: boolean;
 }

@@ -26,13 +26,13 @@ import {
   ApiConsumes,
   ApiOkResponse,
   ApiOperation,
-  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { ActivitiesService } from './activities.service';
 import { UploadActivityDto } from './dto/upload-activity.dto';
 import { UpdateActivityDto } from './dto/update-activity.dto';
 import { HrZonesQueryDto } from './dto/hr-zones-query.dto';
+import { ListActivitiesQueryDto } from './dto/list-activities-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -93,17 +93,12 @@ export class ActivitiesController {
     summary:
       'Lister les activités (les miennes en tant qu’athlète, ou celles de mes athlètes en tant que coach)',
   })
-  @ApiQuery({
-    name: 'athleteId',
-    required: false,
-    description: 'Coach uniquement : filtrer sur un athlète précis',
-  })
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
-    @Query('athleteId') athleteId?: string,
+    @Query() query: ListActivitiesQueryDto,
   ) {
-    return this.activitiesService.findAll(user.sub, user.role, athleteId);
+    return this.activitiesService.findAll(user.sub, user.role, query);
   }
 
   @ApiOperation({
@@ -290,7 +285,8 @@ export class ActivitiesController {
   }
 
   @ApiOperation({
-    summary: 'Modifier ma note/difficulté ressentie sur une activité',
+    summary:
+      'Modifier ma note/difficulté ressentie, le workout lié ou le flag training d’une activité',
   })
   @Roles(Role.ATHLETE)
   @Patch(':id')

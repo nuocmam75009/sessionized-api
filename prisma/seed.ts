@@ -437,6 +437,7 @@ async function main() {
             targetDurationSec: template.targetDurationSec,
             targetDistanceM: template.targetDistanceM,
             targetHeartRateZone: template.targetHeartRateZone,
+            training: template.labels.includes(ActivityLabel.WORKOUT),
             laps: template.laps
               ? {
                   create: template.laps.map((lap, index) => ({
@@ -469,6 +470,7 @@ async function main() {
               .digest('hex'),
             sport: 'Run',
             labels: template.labels,
+            training: template.labels.includes(ActivityLabel.WORKOUT),
             startedAt,
             totalDistanceM: built.totalDistanceM,
             totalDurationSec: built.totalDurationSec,
@@ -549,6 +551,7 @@ async function main() {
             .digest('hex'),
           sport: 'Run',
           labels: extra.labels,
+          training: extra.labels.includes(ActivityLabel.WORKOUT),
           startedAt,
           totalDistanceM: built.totalDistanceM,
           totalDurationSec: built.totalDurationSec,

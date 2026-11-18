@@ -11,15 +11,11 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiQuery,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { WorkoutsService } from './workouts.service';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
 import { UpdateWorkoutDto } from './dto/update-workout.dto';
+import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -47,17 +43,12 @@ export class WorkoutsController {
     summary:
       'Lister les workouts (les miens en tant que coach, ou les siens en tant qu’athlète)',
   })
-  @ApiQuery({
-    name: 'athleteId',
-    required: false,
-    description: 'Coach uniquement : filtrer sur un athlète précis',
-  })
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
-    @Query('athleteId') athleteId?: string,
+    @Query() query: ListWorkoutsQueryDto,
   ) {
-    return this.workoutsService.findAll(user.sub, user.role, athleteId);
+    return this.workoutsService.findAll(user.sub, user.role, query);
   }
 
   @ApiOperation({ summary: 'Récupérer un workout' })

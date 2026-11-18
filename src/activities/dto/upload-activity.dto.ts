@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -8,6 +9,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { ToBoolean } from '../../common/transforms/to-boolean.transform';
 
 export class UploadActivityDto {
   @ApiPropertyOptional({
@@ -39,4 +41,14 @@ export class UploadActivityDto {
   @Min(1)
   @Max(10)
   difficultyNote?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Séance de qualité, à comparer avec les autres. Par défaut : true si le workout lié est marqué training, false sinon',
+    example: true,
+  })
+  @IsOptional()
+  @ToBoolean()
+  @IsBoolean()
+  training?: boolean;
 }

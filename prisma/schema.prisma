@@ -260,6 +260,13 @@ model Activity {
   sport    String?
   subSport String?
   labels   ActivityLabel[]
+  // Séance de qualité (fractionné, seuil, côtes…) : sert à isoler ces séances
+  // pour les comparer entre elles et suivre leur progression. Contrairement à
+  // `labels`, qui reflète Strava tel quel, c'est l'athlète qui a le dernier mot.
+  // Valeur initiale, à la création comme à la liaison à un workout : le choix
+  // explicite de l'athlète, sinon `true` si le workout lié est lui-même
+  // `training`, ou si Strava porte le libellé WORKOUT.
+  training Boolean         @default(false)
 
   startedAt        DateTime
   totalDistanceM   Float
@@ -406,6 +413,10 @@ model Workout {
   targetDistanceM     Float?
   targetDurationSec   Float?
   targetHeartRateZone HeartRateZone?
+  // Séance de qualité prescrite par le coach. L'activité liée en hérite à la
+  // liaison, et suit chaque changement ultérieur du coach (cf.
+  // WorkoutsService.update) : la dernière décision explicite l'emporte.
+  training            Boolean        @default(false)
 
   laps     WorkoutLap[]
   activity Activity?
